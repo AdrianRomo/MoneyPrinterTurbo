@@ -31,14 +31,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy only the requirements.txt first to leverage Docker cache
 COPY requirements.txt ./
 
-# Install Python dependencies
+# Install Python dependencies from the official PyPI.
 RUN python3 -m pip install --no-cache-dir \
-    -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com \
-    --retries 3 --timeout 60 -r requirements.txt || \
-    python3 -m pip install --no-cache-dir \
-    -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/ --trusted-host mirrors.tuna.tsinghua.edu.cn \
-    --retries 3 --timeout 60 -r requirements.txt || \
-    python3 -m pip install --no-cache-dir \
     --retries 3 --timeout 60 -r requirements.txt
 
 # Now copy the rest of the codebase into the image

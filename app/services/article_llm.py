@@ -88,7 +88,20 @@ def _extract_json(text: str) -> Optional[dict]:
     return None
 
 
-def _call_json(prompt: str, retries: int = _MAX_JSON_RETRIES) -> dict:
+def _brief_model() -> str:
+    """Optional cheaper/faster model for lightweight JSON side tasks (brief,
+    fact-check). Empty means "use the main configured model"."""
+    try:
+        from app.config import config
+
+        return str(config.app.get("article_brief_model_name", "") or "").strip()
+    except Exception:  # pragma: no cover - defensive
+        return ""
+
+
+def _call_json(
+    prompt: str, retries: int = _MAX_JSON_RETRIES, *, model_override: str = ""
+) -> dict:
     """Call the configured LLM and return a parsed JSON object.
 
     Automatic recovery: retries on empty/error/malformed responses; the final
@@ -101,7 +114,12 @@ def _call_json(prompt: str, retries: int = _MAX_JSON_RETRIES) -> dict:
                 "\n\nIMPORTANT: Respond with ONE valid minified JSON object only. "
                 "No markdown, no commentary."
             )
-        response = llm._generate_response(effective_prompt)
+        # Only pass the override when one is set, so the common path stays a plain
+        # single-arg call (keeps existing callers/mocks working unchanged).
+        if model_override:
+            response = llm._generate_response(effective_prompt, model_override=model_override)
+        else:
+            response = llm._generate_response(effective_prompt)
         if isinstance(response, str) and response.startswith("Error:"):
             last_error = response
             logger.warning(f"llm json call failed (attempt {attempt}): {response}")
@@ -129,6 +147,137 @@ def _sources_block(articles: List[ArticleRecord]) -> str:
         lines.append(f"BODY: {article.text[:_PER_ARTICLE_CHARS]}")
     lines.append("\n<<<END SOURCE MATERIAL>>>")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Script brief (auto "Custom Script Requirements" from a single article)
+# ---------------------------------------------------------------------------
+
+_BRIEF_TEXT_CHARS = 6000
+
+
+def _coerce_str(value, limit: int) -> str:
+    if not isinstance(value, str):
+        value = "" if value is None else str(value)
+    return value.strip()[:limit]
+
+
+def _coerce_str_list(value, max_items: int, item_chars: int) -> List[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    out: List[str] = []
+    for item in value:
+        text = _coerce_str(item, item_chars)
+        if text:
+            out.append(text)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _normalize_brief(data: dict) -> dict:
+    """Coerce a model-produced brief into a validated, bounded dict.
+
+    Deterministic clamping keeps malformed/oversized model output from flowing
+    into the WebUI fields; ``recommended_paragraphs == 0`` means "unspecified".
+    """
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        paras = int(data.get("recommended_paragraphs") or 0)
+    except (TypeError, ValueError):
+        paras = 0
+    paras = max(1, min(paras, 10)) if paras else 0
+    return {
+        "subject": _coerce_str(data.get("subject"), 100),
+        "content_type": _coerce_str(data.get("content_type"), 40).lower(),
+        "tone": _coerce_str(data.get("tone"), 80),
+        "audience": _coerce_str(data.get("audience"), 120),
+        "hook": _coerce_str(data.get("hook"), 300),
+        "key_points": _coerce_str_list(data.get("key_points"), 6, 240),
+        "recommended_paragraphs": paras,
+        "visual_themes": _coerce_str_list(data.get("visual_themes"), 8, 60),
+        "sensitivity": _coerce_str(data.get("sensitivity"), 240),
+    }
+
+
+def _brief_source_block(title: str, text: str) -> str:
+    title = (title or "").strip()
+    body = (text or "").strip()[:_BRIEF_TEXT_CHARS]
+    lines = ["<<<BEGIN SOURCE MATERIAL (untrusted data)>>>"]
+    if title:
+        lines.append(f"TITLE: {title}")
+    lines.append(f"BODY: {body}")
+    lines.append("<<<END SOURCE MATERIAL>>>")
+    return "\n".join(lines)
+
+
+def analyze_article_brief(title: str, text: str, *, language: str = "") -> dict:
+    """Analyze a single article and return a structured "script brief".
+
+    The brief drives the WebUI "Custom Script Requirements" field: recommended
+    subject, tone, audience, hook, must-include facts, pacing and visual themes —
+    all derived from the article, never invented. The article text is untrusted
+    and treated strictly as data (see :data:`_INJECTION_GUARD`)."""
+    if language:
+        lang_line = f"Write all field values in {language}."
+    else:
+        lang_line = "Write all field values in the same language as the article."
+
+    prompt = f"""# Role: Short-Form Video Producer and Script Editor
+
+{_INJECTION_GUARD}
+
+## Task
+Read the source article below and produce a concise production brief for a
+short-form video based on it. Base everything strictly on the article; do not
+invent facts, names, numbers or events. {lang_line}
+
+{_brief_source_block(title, text)}
+
+## Output
+Return ONE minified JSON object with exactly these fields:
+- "subject": a short, specific video subject/title (<= 100 chars) drawn from the article.
+- "content_type": one of "news", "explainer", "opinion", "tutorial", "product", "feature".
+- "tone": 2-4 words for the recommended tone (e.g. "measured and factual").
+- "audience": the intended audience in a few words.
+- "hook": one sentence describing how the video should open (an angle, not a full script).
+- "key_points": array of 3-6 short strings, each a must-include fact taken directly from the article.
+- "recommended_paragraphs": integer between 1 and 10 for script length.
+- "visual_themes": array of 3-8 short keyword phrases for stock-footage search.
+- "sensitivity": short note if the topic is sensitive or still developing (advise measured, non-definitive language); otherwise "".
+Return only the JSON object, no markdown or commentary.
+"""
+    data = _call_json(prompt, model_override=_brief_model())
+    return _normalize_brief(data)
+
+
+def brief_to_requirements(brief: dict) -> str:
+    """Render a script brief into editable "Custom Script Requirements" text."""
+    brief = brief or {}
+    lines: List[str] = []
+    if brief.get("content_type"):
+        lines.append(f"Content type: {brief['content_type']}.")
+    if brief.get("tone"):
+        lines.append(f"Tone: {brief['tone']}.")
+    if brief.get("audience"):
+        lines.append(f"Audience: {brief['audience']}.")
+    if brief.get("hook"):
+        lines.append(f"Open with: {brief['hook']}")
+    if brief.get("key_points"):
+        lines.append(
+            "Must cover (use only facts from the article, do not invent anything):"
+        )
+        lines.extend(f"- {point}" for point in brief["key_points"])
+    if brief.get("sensitivity"):
+        lines.append(f"Sensitivity: {brief['sensitivity']}")
+    lines.append(
+        "Use only information supported by the source article; do not add outside "
+        "facts, opinions or speculation."
+    )
+    return "\n".join(lines)[: llm.MAX_SCRIPT_PROMPT_LENGTH]
 
 
 # ---------------------------------------------------------------------------
@@ -429,6 +578,52 @@ Respond with ONE JSON object:
         issues=[str(i) for i in issues][:12],
         revised_script=data.get("revised_script") if isinstance(data.get("revised_script"), dict) else None,
     )
+
+
+def check_faithfulness(script_text: str, reference_text: str) -> dict:
+    """Fact-check a plain-text script against a single source article.
+
+    Returns ``{"supported": bool, "confidence": 0..1, "issues": [str]}`` where
+    each issue names a statement not supported by (or contradicting) the source.
+    This is a quality aid, never a hard gate: if the check cannot run it returns
+    ``supported=True`` with a low confidence so callers can proceed.
+    """
+    if not (script_text or "").strip() or not (reference_text or "").strip():
+        return {"supported": True, "confidence": 0.0, "issues": []}
+
+    prompt = f"""# Role: Automated Fact-Checker
+
+{_INJECTION_GUARD}
+
+## Task
+Compare the SCRIPT below against the SOURCE ARTICLE. Identify every statement in
+the script that is NOT supported by the source — invented facts, names, numbers,
+quotes, dates or events — or that contradicts the source. General phrasing that
+adds no new factual claim is acceptable and should not be flagged.
+
+## Script
+{script_text[:4000]}
+
+## Output
+Respond with ONE minified JSON object:
+{{"supported": <bool, true only if every factual claim is supported>, "confidence": <number 0..1>, "issues": [<short string naming each unsupported or contradicted claim>]}}
+
+{_brief_source_block("", reference_text)}
+"""
+    try:
+        data = _call_json(prompt, model_override=_brief_model())
+    except Exception as exc:  # noqa: BLE001 - quality aid, never a gate
+        logger.warning(f"faithfulness check unavailable: {exc}")
+        return {"supported": True, "confidence": 0.5, "issues": [f"check unavailable: {exc}"]}
+
+    issues = data.get("issues") or []
+    if not isinstance(issues, list):
+        issues = [str(issues)]
+    return {
+        "supported": bool(data.get("supported", True)),
+        "confidence": normalize_score(data.get("confidence")),
+        "issues": [str(i) for i in issues][:12],
+    }
 
 
 def generate_reviewed_script(

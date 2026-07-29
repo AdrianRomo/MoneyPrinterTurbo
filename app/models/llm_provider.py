@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 
-DEFAULT_LLM_PROVIDER_ID = "moonshot"
+DEFAULT_LLM_PROVIDER_ID = "openai"
 
 
 @dataclass(frozen=True, slots=True)

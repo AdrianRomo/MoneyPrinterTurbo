@@ -5,6 +5,7 @@ import sys
 import tempfile
 from concurrent.futures import Future
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -85,7 +86,31 @@ class TestTaskService(unittest.TestCase):
             paragraph_number=2,
             video_script_prompt="语气轻松",
             custom_system_prompt="Only write short narration.",
+            reference_content="",
+            strict_source=False,
         )
+
+    def test_generate_script_grounds_on_reference_source_url(self):
+        """带有参考文章链接的任务在自动生成文案时应抓取正文并严格据此生成。"""
+        params = VideoParams(
+            video_subject="Outage",
+            video_script="",
+            reference_source_url="https://news.example.com/x",
+        )
+        ref = SimpleNamespace(text="Real article body about the outage.")
+        with patch.object(
+            tm, "_resolve_reference_text", wraps=tm._resolve_reference_text
+        ), patch(
+            "app.services.article_draft.fetch_reference", return_value=ref
+        ), patch.object(
+            tm.llm, "generate_script", return_value="grounded script"
+        ) as generate:
+            result = tm.generate_script("task-id", params)
+
+        self.assertEqual(result, "grounded script")
+        kwargs = generate.call_args.kwargs
+        self.assertEqual(kwargs["reference_content"], "Real article body about the outage.")
+        self.assertTrue(kwargs["strict_source"])
 
     def test_generate_final_videos_forwards_clip_speed(self):
         """任务编排层必须把用户选择的画面速度传给视频合成服务。"""

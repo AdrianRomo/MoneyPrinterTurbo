@@ -189,16 +189,21 @@ def test_generation_submit_skips_duplicate_config_save():
     无法刷新日志。生成分支已经提前保存配置，页面末尾只处理普通交互。
     """
     tree = ast.parse(WEBUI_MAIN.read_text(encoding="utf-8"))
+    functions = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
     controls = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "_render_generation_controls"
+        node for node in functions if node.name == "_render_generation_controls"
     )
+    # Locate the function that owns the post-submit guard structurally rather than
+    # by name, so the check survives refactors that move it out of
+    # _render_application (e.g. into _render_video_generator).
     application = next(
         node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_render_application"
+        for node in functions
+        if any(
+            isinstance(child, ast.If)
+            and ast.unparse(child.test) == "not generation_submitted"
+            for child in node.body
+        )
     )
 
     assert isinstance(controls.body[-1], ast.Return)

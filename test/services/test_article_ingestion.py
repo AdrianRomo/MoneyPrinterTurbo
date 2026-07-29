@@ -22,6 +22,31 @@ def _html(body: str, title: str = "Example Headline") -> bytes:
     ).encode("utf-8")
 
 
+class TestGuessLanguage(unittest.TestCase):
+    def test_latin_languages(self):
+        self.assertEqual(
+            ing.guess_language("The president announced the new policy and the plan for the year."),
+            "english",
+        )
+        self.assertEqual(
+            ing.guess_language("El presidente anunció la nueva política y el plan para el año."),
+            "spanish",
+        )
+        self.assertEqual(
+            ing.guess_language("Le président a annoncé la nouvelle politique et le plan pour les mois qui viennent."),
+            "french",
+        )
+
+    def test_non_latin_scripts(self):
+        self.assertEqual(ing.guess_language("总统今天宣布了新的经济政策和计划。"), "chinese")
+        self.assertEqual(ing.guess_language("大統領はきょう新しい政策を発表しました。"), "japanese")
+        self.assertEqual(ing.guess_language("Президент сегодня объявил новую политику."), "russian")
+
+    def test_returns_empty_when_unsure(self):
+        self.assertEqual(ing.guess_language(""), "")
+        self.assertEqual(ing.guess_language("xyz qwv"), "")
+
+
 LONG_BODY = (
     "The central bank raised interest rates by 50 basis points on Tuesday, "
     "citing persistent inflation across the economy. "

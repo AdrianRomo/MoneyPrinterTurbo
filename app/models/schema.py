@@ -121,6 +121,11 @@ class VideoParams(BaseModel):
     paragraph_number: int = Field(default=1, ge=1, le=10)
     video_script_prompt: str = Field(default="", max_length=2000)
     custom_system_prompt: str = Field(default="", max_length=8000)
+    # Provenance for scripts grounded on a reference article (topic mode). These
+    # only record where the source came from for attribution; they do not change
+    # pipeline routing (that is content_mode/article_url below).
+    reference_source_url: Optional[str] = Field(default="", max_length=2000)
+    reference_source_title: Optional[str] = Field(default="", max_length=500)
 
     # -----------------------------------------------------------------------
     # Article Mode (backward compatible).
@@ -189,6 +194,12 @@ class VideoScriptParams:
     paragraph_number: int = Field(default=1, ge=1, le=10)
     video_script_prompt: str = Field(default="", max_length=2000)
     custom_system_prompt: str = Field(default="", max_length=8000)
+    # Ground the script on a source article. Provide either a URL (fetched
+    # server-side, SSRF-protected) or the article text directly. strict_source
+    # forbids any fact not present in the reference.
+    reference_url: Optional[str] = Field(default="", max_length=2000)
+    reference_content: Optional[str] = Field(default="", max_length=20000)
+    strict_source: bool = False
 
 
 class VideoTermsParams:

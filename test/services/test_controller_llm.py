@@ -38,6 +38,8 @@ class TestLlmController(unittest.TestCase):
             paragraph_number=2,
             video_script_prompt="Friendly tone",
             custom_system_prompt="Return narration only.",
+            reference_content="",
+            strict_source=False,
         )
 
     def test_generate_video_terms_forwards_order_matching_mode(self):

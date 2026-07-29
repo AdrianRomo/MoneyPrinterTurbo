@@ -70,12 +70,51 @@ class TestScriptPromptOptions(unittest.TestCase):
             video_script_prompt="语气轻松，面向程序员",
         )
 
-        self.assertIn("# Role: Video Script Generator", prompt)
-        self.assertIn("- video subject: 咖啡", prompt)
-        self.assertIn("- number of paragraphs: 3", prompt)
-        self.assertIn("- language: zh-CN", prompt)
+        # 默认提示词用 {{...}} 占位符带上主题与段落数，替换后不应残留占位符，
+        # 也不应再额外拼接 “# Initialization” 造成重复注入。
+        self.assertNotIn("{{video_subject}}", prompt)
+        self.assertNotIn("{{paragraph_count}}", prompt)
+        self.assertNotIn("# Initialization", prompt)
+        self.assertIn("咖啡", prompt)
+        self.assertIn("Number of paragraphs: 3", prompt)
+        self.assertIn("Respond in: zh-CN", prompt)
         self.assertIn("# Additional User Requirements:", prompt)
         self.assertIn("语气轻松，面向程序员", prompt)
+
+    def test_build_script_prompt_injects_reference_article(self):
+        """
+        提供参考文章时，应把正文作为素材来源拼进提示词，并明确要求忠于文章事实，
+        用于“粘贴文章链接生成脚本”的场景。
+        """
+        prompt = llm.build_script_prompt(
+            video_subject="火星探测",
+            paragraph_number=2,
+            reference_content="NASA 周二发射了一台火星车。",
+        )
+
+        self.assertIn("# Reference Article", prompt)
+        self.assertIn("NASA 周二发射了一台火星车。", prompt)
+
+    def test_build_script_prompt_strict_source_forbids_invention(self):
+        """
+        strict_source 模式用于“从文章生成草稿”，必须明确要求只用文章中的事实、
+        不得编造，避免草稿加入来源之外的信息。
+        """
+        loose = llm.build_script_prompt(
+            video_subject="火星探测",
+            paragraph_number=2,
+            reference_content="NASA 周二发射了一台火星车。",
+            strict_source=False,
+        )
+        strict = llm.build_script_prompt(
+            video_subject="火星探测",
+            paragraph_number=2,
+            reference_content="NASA 周二发射了一台火星车。",
+            strict_source=True,
+        )
+        self.assertNotIn("ONLY facts", loose)
+        self.assertIn("ONLY facts", strict)
+        self.assertIn("Do NOT add", strict)
 
     def test_custom_system_prompt_keeps_runtime_context(self):
         """
@@ -113,7 +152,7 @@ class TestScriptPromptOptions(unittest.TestCase):
             )
 
         self.assertEqual(result, "第一段。\n\n第二段。")
-        self.assertIn("- number of paragraphs: 2", captured["prompt"])
+        self.assertIn("Number of paragraphs: 2", captured["prompt"])
         self.assertIn("开头更有悬念", captured["prompt"])
 
     def test_generate_terms_can_request_script_ordered_keywords(self):
@@ -141,6 +180,40 @@ class TestScriptPromptOptions(unittest.TestCase):
         self.assertEqual(result, ["opening city", "middle office", "final sunset"])
         self.assertIn("chronological stock-video search terms", captured["prompt"])
         self.assertIn("same order as the script narration", captured["prompt"])
+
+    def test_generate_terms_injects_seed_subjects(self):
+        """基于文章的真实主体（人名/地名/机构）应作为提示注入关键词生成。"""
+        captured = {}
+
+        def fake_generate_response(prompt):
+            captured["prompt"] = prompt
+            return '["a", "b"]'
+
+        with patch.object(
+            llm, "_generate_response", side_effect=fake_generate_response
+        ):
+            llm.generate_terms(
+                video_subject="space",
+                video_script="A launch happened.",
+                seed_terms=["NASA", "Cape Canaveral", "NASA"],
+            )
+        self.assertIn("Real Subjects From Source", captured["prompt"])
+        self.assertIn("NASA", captured["prompt"])
+        self.assertIn("Cape Canaveral", captured["prompt"])
+        # 去重后 NASA 只出现一次
+        self.assertEqual(captured["prompt"].count("NASA"), 1)
+
+    def test_generate_terms_without_seed_terms_has_no_seed_block(self):
+        with patch.object(llm, "_generate_response", return_value='["x"]'):
+            captured = {}
+
+            def fake(prompt):
+                captured["prompt"] = prompt
+                return '["x"]'
+
+            with patch.object(llm, "_generate_response", side_effect=fake):
+                llm.generate_terms("subj", "script")
+            self.assertNotIn("Real Subjects From Source", captured["prompt"])
 
     def test_generate_terms_returns_empty_list_on_provider_error(self):
         """

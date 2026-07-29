@@ -465,6 +465,63 @@ def entities_of(text: str, limit: int = 12) -> List[str]:
     return [entity for entity, _ in ranked[:limit]]
 
 
+# Small, dependency-free language guesser. Good enough to *hint* the article's
+# language in the UI (e.g. so the user knows to leave "Auto Detect" on, or to
+# pick another language to translate); never used to force anything.
+_LANG_STOPWORDS = {
+    "english": {"the", "and", "of", "to", "in", "is", "that", "for", "it", "with",
+                "as", "was", "on", "are", "this", "be", "at", "by", "an"},
+    "spanish": {"el", "la", "de", "que", "y", "en", "los", "del", "las", "un",
+                "una", "por", "con", "para", "es", "se", "su", "lo", "como"},
+    "french": {"le", "la", "les", "de", "des", "et", "un", "une", "que", "qui",
+               "dans", "pour", "sur", "est", "au", "aux", "ce", "pas", "plus"},
+    "german": {"der", "die", "das", "und", "den", "von", "zu", "mit", "auf",
+               "ist", "ein", "eine", "dem", "des", "im", "für", "nicht", "auch"},
+    "portuguese": {"o", "a", "os", "as", "de", "que", "e", "do", "da", "dos",
+                   "das", "um", "uma", "por", "com", "para", "se", "no", "na"},
+    "italian": {"il", "la", "di", "che", "e", "un", "una", "per", "con", "non",
+                "sono", "del", "della", "le", "gli", "nel", "al", "come"},
+}
+
+
+def guess_language(text: str) -> str:
+    """Best-effort language guess as a lowercase English name, or "" if unsure.
+
+    Uses Unicode script ranges for non-Latin languages and small stop-word sets
+    for common Latin-script ones. Intentionally conservative: returns "" rather
+    than guessing when the signal is weak.
+    """
+    sample = (text or "").strip()[:2000]
+    if not sample:
+        return ""
+    if re.search(r"[぀-ヿ]", sample):
+        return "japanese"  # kana is unique to Japanese
+    if re.search(r"[가-힣]", sample):
+        return "korean"
+    if re.search(r"[一-鿿]", sample):
+        return "chinese"
+    if re.search(r"[Ѐ-ӿ]", sample):
+        return "russian"
+    if re.search(r"[؀-ۿ]", sample):
+        return "arabic"
+    if re.search(r"[฀-๿]", sample):
+        return "thai"
+    if re.search(r"[Ͱ-Ͽ]", sample):
+        return "greek"
+
+    words = re.findall(r"[a-zàâäáéèêëíîïóôöúûüñçã]+", sample.lower())
+    if not words:
+        return ""
+    scores = {
+        lang: sum(1 for w in words if w in stop) for lang, stop in _LANG_STOPWORDS.items()
+    }
+    best = max(scores, key=scores.get)
+    # Require a minimal density of stop-word hits so short/ambiguous text stays "".
+    if scores[best] == 0 or scores[best] / max(len(words), 1) < 0.02:
+        return ""
+    return best
+
+
 def normalize_title(title: str) -> str:
     lowered = re.sub(r"[^a-z0-9 ]+", " ", (title or "").lower())
     tokens = [t for t in lowered.split() if t and t not in _STOPWORDS]

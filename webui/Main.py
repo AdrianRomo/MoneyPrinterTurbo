@@ -41,7 +41,7 @@ from app.models.schema import (
     VideoParams,
     VideoTransitionMode,
 )
-from app.services import article_pipeline, article_ui
+from app.services import article_draft, article_pipeline, article_ui
 from app.services import bgm as bgm_service
 from app.services import cache_manager, llm, video, voice, webui_task
 from app.services import elevenlabs_music as elevenlabs_music_service
@@ -1597,6 +1597,124 @@ def render_script_prompt_preview(prompt):
     st.code(prompt, language="markdown", wrap_lines=True)
 
 
+def _looks_like_url(text: str) -> bool:
+    """判断输入是否是一个 http(s) 链接，用于识别“主题框里直接粘贴文章链接”。"""
+    return bool(re.match(r"^https?://\S+$", (text or "").strip(), re.IGNORECASE))
+
+
+def load_reference(url_text: str) -> "article_draft.ArticleReference":
+    """抓取并抽取参考文章（支持一个或多个链接），按输入在会话里缓存结果。
+
+    抓取/抽取/去重/合并逻辑统一收敛在 ``app.services.article_draft``（含 SSRF 校验），
+    这里只负责会话级缓存、多来源失败提示，以及把正文同步给“生成脚本 / 预览提示词”。
+    """
+    text = (url_text or "").strip()
+    cached = st.session_state.get("reference_article")
+    if cached is not None and st.session_state.get("reference_article_loaded_url") == text:
+        return cached
+
+    urls = article_draft.parse_source_urls(text)
+    st.session_state["reference_source_failures"] = []
+    st.session_state["reference_source_count"] = len(urls)
+    if len(urls) <= 1:
+        single = urls[0] if urls else text
+        fetched = article_draft.fetch_reference(single)
+        # 用输入原文作为 requested_url，便于 _active_reference 精确匹配当前输入。
+        reference = article_draft.ArticleReference(
+            requested_url=text,
+            url=fetched.url,
+            domain=fetched.domain,
+            title=fetched.title,
+            text=fetched.text,
+        )
+    else:
+        combined, used, failed = article_draft.build_combined_reference(
+            urls, requested_url=text
+        )
+        st.session_state["reference_source_failures"] = failed
+        st.session_state["reference_source_count"] = len(used)
+        reference = combined or article_draft.ArticleReference(
+            requested_url=text, url="", domain="", title="", text=""
+        )
+
+    st.session_state["reference_article"] = reference
+    st.session_state["reference_article_loaded_url"] = text
+    st.session_state["reference_article_text"] = reference.text
+    return reference
+
+
+def _active_reference(url_field: str, subject: str):
+    """Return the cached article only if it still matches the current inputs.
+
+    Keeps grounding + provenance tied to the reference link actually in the form:
+    if the user clears the URL (and isn't pasting it in the subject), the cached
+    article stops being applied instead of silently grounding later scripts.
+    """
+    ref = st.session_state.get("reference_article")
+    if ref is None:
+        return None
+    candidates = {ref.requested_url, ref.url}
+    if url_field and url_field in candidates:
+        return ref
+    if subject and subject in candidates:
+        return ref
+    return None
+
+
+def _render_article_preview(reference: "article_draft.ArticleReference"):
+    """展示已抓取文章的来源信息，让用户先确认“抓到的是正文而不是导航/付费墙”。"""
+    if reference is None:
+        return
+    with st.expander(tr("Fetched Article Preview"), expanded=True):
+        meta = tr("Source Meta").format(
+            domain=reference.domain or "—",
+            words=reference.word_count,
+        )
+        st.caption(meta)
+        source_count = st.session_state.get("reference_source_count", 1)
+        if source_count and source_count > 1:
+            st.caption(tr("Multi Source Count").format(count=source_count))
+        failures = st.session_state.get("reference_source_failures") or []
+        if failures:
+            st.caption(tr("Sources Failed").format(urls=", ".join(failures)))
+        if reference.title:
+            st.markdown(f"**{reference.title}**")
+        if not reference.is_usable:
+            st.warning(tr("Article Looks Thin"))
+        st.write(reference.snippet(400))
+
+
+_FETCH_ERROR_I18N = {
+    "blocked": "Fetch Error Blocked",
+    "not_found": "Fetch Error Not Found",
+    "unavailable": "Fetch Error Unavailable",
+    "timeout": "Fetch Error Timeout",
+    "network": "Fetch Error Network",
+    "empty": "Reference Article Empty",
+    "unknown": "Reference Article Fetch Failed",
+}
+
+
+def _show_fetch_error(exc):
+    """Render a specific, consistent message for a fetch failure (see the shared
+    taxonomy in article_draft.classify_fetch_error)."""
+    category = article_draft.classify_fetch_error(exc)
+    st.error(tr(_FETCH_ERROR_I18N.get(category, "Reference Article Fetch Failed")))
+
+
+def _apply_pending_script_fields():
+    """把“从文章生成草稿”排队的字段值写回对应控件。
+
+    Streamlit 不允许在控件本轮实例化之后再修改它的 session 值，因此草稿处理
+    先把结果暂存到非控件键并 ``st.rerun()``，这里在控件创建之前统一应用。
+    """
+    pending = st.session_state.pop("_pending_script_fields", None)
+    if not pending:
+        return
+    for widget_key, value in pending.items():
+        st.session_state[widget_key] = value
+
+
 def stable_segmented_control(
     label, options, default_value, key, format_func=None, **kwargs
 ):
@@ -2060,11 +2178,55 @@ def _render_script_settings(panel, params):
     with panel:
         with st.container(border=True):
             st.write(tr("Video Script Settings"))
+            # 必须在下方任何相关控件实例化之前应用草稿字段，否则 Streamlit 会拒绝
+            # 修改已创建控件的 session 值。
+            _apply_pending_script_fields()
+            draft_notice = st.session_state.pop("_article_draft_notice", None)
+            if draft_notice:
+                st.toast(draft_notice, icon="✅")
+
+            faithfulness = st.session_state.pop("_draft_faithfulness", None)
+            if faithfulness is not None:
+                issues = faithfulness.get("issues") or []
+                if faithfulness.get("supported") and not issues:
+                    st.success(tr("Faithfulness OK"))
+                else:
+                    st.warning(tr("Faithfulness Issues"))
+                    for issue in issues:
+                        st.caption(f"• {issue}")
+
             params.video_subject = st.text_input(
                 tr("Video Subject"),
                 placeholder=tr("Video Subject Placeholder"),
                 key="video_subject",
             ).strip()
+
+            reference_article_url = st.text_input(
+                tr("Reference Article URL"),
+                placeholder=tr("Reference Article URL Placeholder"),
+                help=tr("Reference Article URL Help"),
+                key="reference_article_url",
+            ).strip()
+
+            # 已抓取的文章预览：让用户确认抓到的是正文本身，再决定是否据此生成。
+            active_reference = _active_reference(
+                reference_article_url, params.video_subject
+            )
+            _render_article_preview(active_reference)
+            if active_reference is not None:
+                # 记录来源用于署名，随任务参数一并持久化（见 save_script_data）。
+                params.reference_source_url = active_reference.url
+                params.reference_source_title = active_reference.title
+                if active_reference.domain:
+                    st.caption(tr("Based on Source").format(domain=active_reference.domain))
+                # 语言只做提示，绝不强制覆盖用户选择（用户可能想翻译成另一种语言）。
+                detected_lang = article_draft.detected_language(active_reference)
+                if detected_lang:
+                    st.caption(
+                        tr("Article Language Hint").format(
+                            language=detected_lang.capitalize()
+                        )
+                    )
 
             video_languages = [
                 (tr("Auto Detect"), ""),
@@ -2131,6 +2293,11 @@ def _render_script_settings(panel, params):
                         icon=":material/preview:",
                         use_container_width=True,
                     ):
+                        preview_reference_text = (
+                            active_reference.text
+                            if active_reference is not None
+                            else ""
+                        )
                         render_script_prompt_preview(
                             llm.build_script_prompt(
                                 video_subject=params.video_subject,
@@ -2138,8 +2305,88 @@ def _render_script_settings(panel, params):
                                 paragraph_number=params.paragraph_number,
                                 video_script_prompt=params.video_script_prompt,
                                 custom_system_prompt=params.custom_system_prompt,
+                                reference_content=preview_reference_text,
+                                strict_source=bool(preview_reference_text),
                             )
                         )
+
+            # 从文章生成草稿：抓取 → 分析生成脚本简报 → 严格基于文章生成草稿，
+            # 回填“视频主题 / 视频文案 / 文案要求”，让用户先审阅再继续。
+            if reference_article_url or _looks_like_url(params.video_subject):
+                fact_check_draft = st.checkbox(
+                    tr("Fact-check Draft"),
+                    key="fact_check_draft",
+                    help=tr("Fact-check Draft Help"),
+                )
+                if st.button(
+                    tr("Draft from Article"),
+                    key="draft_from_article",
+                    use_container_width=True,
+                    type="secondary",
+                    icon=":material/article:",
+                    help=tr("Draft from Article Help"),
+                ):
+                    draft_url = reference_article_url or params.video_subject
+                    reference = None
+                    try:
+                        with st.spinner(tr("Fetching Reference Article")):
+                            reference = load_reference(draft_url)
+                    except Exception as e:  # noqa: BLE001 - 转成界面提示
+                        logger.error(f"failed to fetch reference article: {e}")
+                        _show_fetch_error(e)
+
+                    if reference is not None and not reference.text.strip():
+                        st.error(tr("Reference Article Empty"))
+                    elif reference is not None:
+                        draft = None
+                        with st.spinner(tr("Drafting Script from Article")):
+                            with config.runtime_config_lock():
+                                try:
+                                    draft = article_draft.draft_from_reference(
+                                        reference,
+                                        language=params.video_language,
+                                        paragraph_number=params.paragraph_number,
+                                        custom_system_prompt=params.custom_system_prompt,
+                                        fallback_subject=params.video_subject,
+                                    )
+                                except article_draft.ArticleDraftError:
+                                    st.error(tr("Reference Article Empty"))
+                                except Exception as e:  # noqa: BLE001
+                                    logger.error(f"failed to draft from article: {e}")
+                                    st.error(tr("Article Draft Failed"))
+                        if draft is not None and "Error: " in draft.script:
+                            st.error(tr(draft.script))
+                        elif draft is not None:
+                            # 结果通过“待应用”键回填控件（见 _apply_pending_script_fields），
+                            # 规避 Streamlit 对已实例化控件的写入限制。
+                            pending = {
+                                "video_subject": draft.subject,
+                                "video_script": draft.script,
+                            }
+                            if draft.requirements:
+                                pending["video_script_prompt"] = draft.requirements
+                            if draft.recommended_paragraphs:
+                                pending["paragraph_number_input"] = (
+                                    draft.recommended_paragraphs
+                                )
+                            if draft.suggested_terms:
+                                pending["video_terms"] = ", ".join(
+                                    draft.suggested_terms
+                                )
+                            # 可选：把草稿与文章逐条核对，标出无依据/矛盾的说法（仅提示，不拦截）。
+                            if fact_check_draft:
+                                with st.spinner(tr("Fact-checking Draft")):
+                                    with config.runtime_config_lock():
+                                        st.session_state["_draft_faithfulness"] = (
+                                            article_draft.check_faithfulness(
+                                                draft.script, reference
+                                            )
+                                        )
+                            st.session_state["_pending_script_fields"] = pending
+                            st.session_state["_article_draft_notice"] = tr(
+                                "Article Draft Ready"
+                            )
+                            st.rerun()
 
             if st.button(
                 tr("Generate Video Script and Keywords"),
@@ -2148,25 +2395,41 @@ def _render_script_settings(panel, params):
                 type="secondary",
                 icon=":material/auto_awesome:",
             ):
-                if not params.video_subject:
+                effective_subject = params.video_subject
+                # 只在参考链接仍然“生效”时复用其正文作为依据，生成时不再重新联网抓取。
+                reference_text = (
+                    active_reference.text if active_reference is not None else ""
+                )
+                if _looks_like_url(effective_subject) and not reference_text:
+                    # 用户把链接粘到了主题里但还没抓取，引导先点“从文章生成草稿”。
+                    st.toast(tr("Use Draft from Article Hint"))
+                    st.warning(tr("Use Draft from Article Hint"))
+                elif not effective_subject and not reference_text:
                     # 视频主题是脚本生成的必要输入，提前拦截可以避免无意义的模型调用。
                     st.toast(tr("Please Enter the Video Subject First"))
                     st.warning(tr("Please Enter the Video Subject First"))
                 else:
+                    if reference_text:
+                        st.caption(tr("Reference Article Loaded"))
                     with st.spinner(tr("Generating Video Script and Keywords")):
                         with config.runtime_config_lock():
                             script = llm.generate_script(
-                                video_subject=params.video_subject,
+                                video_subject=effective_subject,
                                 language=params.video_language,
                                 paragraph_number=params.paragraph_number,
                                 video_script_prompt=params.video_script_prompt,
                                 custom_system_prompt=params.custom_system_prompt,
+                                reference_content=reference_text,
+                                strict_source=bool(reference_text),
                             )
                             terms = llm.generate_terms(
-                                params.video_subject,
+                                effective_subject,
                                 script,
                                 amount=8 if params.match_materials_to_script else 5,
                                 match_script_order=params.match_materials_to_script,
+                                seed_terms=article_draft.reference_entities(
+                                    active_reference
+                                ),
                             )
                         if "Error: " in script:
                             st.error(tr(script))
@@ -4346,21 +4609,7 @@ def _render_article_mode():
         _render_article_automation_controls()
 
 
-def _render_application():
-    """按固定顺序渲染顶部栏、弹窗、生成表单和任务结果。"""
-    _render_top_bar()
-
-    if st.session_state.get("settings_dialog_open", False):
-        _render_settings_dialog()
-
-    restore_applied = _apply_pending_task_restore()
-    restore_candidate_id = st.session_state.get("task_restore_candidate_id")
-    if restore_candidate_id:
-        _render_task_restore_dialog(restore_candidate_id)
-    restore_succeeded = st.session_state.pop("task_restore_succeeded", False)
-    if restore_applied or restore_succeeded:
-        st.success(tr("Task Configuration Loaded"))
-
+def _render_video_generator():
     with st.container(key="main_settings_grid"):
         panel = st.columns(4)
     left_panel = panel[0]
@@ -4394,6 +4643,28 @@ def _render_application():
     # 到视频完成，进而让日志 Fragment 无法运行。普通页面交互仍保留统一保存。
     if not generation_submitted:
         config.save_config()
+
+
+def _render_application():
+    """按固定顺序渲染顶部栏、弹窗、生成表单和任务结果。"""
+    _render_top_bar()
+
+    if st.session_state.get("settings_dialog_open", False):
+        _render_settings_dialog()
+
+    restore_applied = _apply_pending_task_restore()
+    restore_candidate_id = st.session_state.get("task_restore_candidate_id")
+    if restore_candidate_id:
+        _render_task_restore_dialog(restore_candidate_id)
+    restore_succeeded = st.session_state.pop("task_restore_succeeded", False)
+    if restore_applied or restore_succeeded:
+        st.success(tr("Task Configuration Loaded"))
+
+    generator_tab, article_tab = st.tabs(["Video Generator", "Article Mode"])
+    with generator_tab:
+        _render_video_generator()
+    with article_tab:
+        _render_article_mode()
 
 
 _render_application()

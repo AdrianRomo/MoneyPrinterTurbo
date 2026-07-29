@@ -250,6 +250,13 @@ docker compose -f docker-compose.release.yml up
 > The recommended default is `docker-compose.release.yml`, which pulls the prebuilt image from GitHub Container Registry: `ghcr.io/harry0703/moneyprinterturbo:latest`.
 > If you need to build the image locally, you can still run `docker compose up`.
 > Before the first start, copy `config.example.toml` to `config.toml` so it can be mounted into the containers.
+> The Docker compose files bind ports to `127.0.0.1` by default. When a remote reverse proxy needs to reach this host over the LAN, set `WEBUI_HOST_BIND` to the host LAN address, for example:
+>
+> ```shell
+> WEBUI_HOST_BIND=192.168.0.135 docker compose up -d --build webui api
+> ```
+>
+> To rebuild without cache, run `docker compose build --no-cache` first, then start the services with `docker compose up -d`.
 
 #### ② Access the WebUI
 

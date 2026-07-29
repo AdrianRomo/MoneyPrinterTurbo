@@ -246,6 +246,13 @@ docker compose -f docker-compose.release.yml up
 > 默认推荐使用 `docker-compose.release.yml`，它会直接拉取 GitHub Container Registry 上的预构建镜像：`ghcr.io/harry0703/moneyprinterturbo:latest`。
 > 如果你需要本地重新构建镜像，可以继续使用 `docker compose up`。
 > 首次启动前，请将 `config.example.toml` 复制为 `config.toml`，供容器挂载使用。
+> Docker compose 文件默认将端口绑定到 `127.0.0.1`。如果远端反向代理需要通过局域网访问这台主机，请将 `WEBUI_HOST_BIND` 设置为主机的局域网地址，例如：
+>
+> ```shell
+> WEBUI_HOST_BIND=192.168.0.135 docker compose up -d --build webui api
+> ```
+>
+> 如果需要无缓存重新构建，请先运行 `docker compose build --no-cache`，然后再用 `docker compose up -d` 启动服务。
 
 #### ② 访问 WebUI
 

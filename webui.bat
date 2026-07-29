@@ -4,8 +4,6 @@ set "CURRENT_DIR=%CD%"
 echo ***** Current directory: %CURRENT_DIR% *****
 set "PYTHONPATH=%CURRENT_DIR%"
 
-rem set HF_ENDPOINT=https://hf-mirror.com
-
 if not defined MPT_WEBUI_HOST set "MPT_WEBUI_HOST=127.0.0.1"
 if not defined MPT_WEBUI_PORT set "MPT_WEBUI_PORT=8501"
 

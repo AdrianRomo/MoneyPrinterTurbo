@@ -265,16 +265,43 @@ def _mark_task_failed(task_id: str, stage: str, error: str) -> dict:
     return failure
 
 
+def _resolve_reference_text(params) -> str:
+    """Resolve grounding text for the script from task params.
+
+    Explicit ``reference_content`` wins; otherwise a ``reference_source_url`` is
+    fetched server-side (SSRF-protected). A fetch failure degrades gracefully to
+    ungrounded generation rather than failing the whole render task.
+    """
+    text = (getattr(params, "reference_content", "") or "").strip()
+    if text:
+        return text
+    url = (getattr(params, "reference_source_url", "") or "").strip()
+    if not url:
+        return ""
+    try:
+        from app.services import article_draft
+
+        return article_draft.fetch_reference(url).text
+    except Exception as exc:  # noqa: BLE001 - grounding is best-effort here
+        logger.warning(
+            f"reference article fetch failed, generating without grounding: {exc}"
+        )
+        return ""
+
+
 def generate_script(task_id, params):
     logger.info("\n\n## generating video script")
     video_script = params.video_script.strip()
     if not video_script:
+        reference_content = _resolve_reference_text(params)
         video_script = llm.generate_script(
             video_subject=params.video_subject,
             language=params.video_language,
             paragraph_number=params.paragraph_number,
             video_script_prompt=params.video_script_prompt,
             custom_system_prompt=params.custom_system_prompt,
+            reference_content=reference_content,
+            strict_source=bool(reference_content),
         )
     else:
         logger.debug(f"video script: \n{video_script}")
