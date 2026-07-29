@@ -4,7 +4,7 @@ import re
 import socket
 import threading
 import time
-from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor, as_completed
 from functools import partial
 from os import path
 from uuid import uuid4
@@ -74,6 +74,28 @@ _VIDEO_MUSIC_PROVIDERS = {
         "display_name": "ElevenLabs",
     },
 }
+_DEFAULT_VIDEO_OUTPUT_PARALLELISM = 2
+_MAX_VIDEO_OUTPUT_PARALLELISM = 4
+
+
+def _get_video_output_parallelism(video_count: int) -> int:
+    if video_count <= 1:
+        return 1
+
+    configured = config.app.get(
+        "video_output_parallelism",
+        _DEFAULT_VIDEO_OUTPUT_PARALLELISM,
+    )
+    try:
+        parallelism = int(configured)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"invalid video_output_parallelism={configured!r}, "
+            f"using default {_DEFAULT_VIDEO_OUTPUT_PARALLELISM}"
+        )
+        parallelism = _DEFAULT_VIDEO_OUTPUT_PARALLELISM
+
+    return max(1, min(parallelism, video_count, _MAX_VIDEO_OUTPUT_PARALLELISM))
 
 
 def _get_video_music_prompt(params: VideoParams) -> str:
@@ -635,9 +657,9 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
 def generate_final_videos(
     task_id, params, downloaded_videos, audio_file, subtitle_path, audio_duration
 ):
-    final_video_paths = []
-    combined_video_paths = []
-    warnings = []
+    video_count = max(1, int(params.video_count or 1))
+    final_video_paths = [None] * video_count
+    combined_video_paths = [None] * video_count
     video_music_provider = _VIDEO_MUSIC_PROVIDERS.get(params.bgm_type)
     video_music_requested = (
         video_music_provider is not None
@@ -647,15 +669,24 @@ def generate_final_videos(
     # 时间线稳定性和可解释性，所以开启后所有输出都使用顺序拼接。
     if params.match_materials_to_script:
         video_concat_mode = VideoConcatMode.sequential
-    elif params.video_count == 1:
+    elif video_count == 1:
         video_concat_mode = params.video_concat_mode
     else:
         video_concat_mode = VideoConcatMode.random
     video_transition_mode = params.video_transition_mode
 
     _progress = 50
-    for i in range(params.video_count):
-        index = i + 1
+    progress_lock = threading.Lock()
+
+    def _mark_progress_step():
+        nonlocal _progress
+        with progress_lock:
+            _progress += 50 / video_count / 2
+            sm.state.update_task(task_id, progress=_progress)
+
+    def _render_one(index: int) -> tuple[int, str, str, list[dict]]:
+        output_started_at = time.perf_counter()
+        output_warnings = []
         combined_video_path = path.join(
             utils.task_dir(task_id), f"combined-{index}.mp4"
         )
@@ -672,8 +703,7 @@ def generate_final_videos(
             clip_speed=params.video_clip_speed,
         )
 
-        _progress += 50 / params.video_count / 2
-        sm.state.update_task(task_id, progress=_progress)
+        _mark_progress_step()
 
         final_video_path = path.join(utils.task_dir(task_id), f"final-{index}.mp4")
 
@@ -704,7 +734,7 @@ def generate_final_videos(
                     f"video_index={index}, error={exc}"
                 )
                 bgm_file_override = ""
-                warnings.append({"code": warning_code, "video_index": index})
+                output_warnings.append({"code": warning_code, "video_index": index})
 
         logger.info(f"\n\n## generating video: {index} => {final_video_path}")
         bgm_mix_succeeded = video.generate_video(
@@ -723,20 +753,56 @@ def generate_final_videos(
             # 第三方已成功返回并通过 FFmpeg 校验，但 MoviePy 最终混音仍可能
             # 因运行环境失败。视频服务会保留无 BGM 成片；API 生成失败时
             # override 为空，因此不会重复追加警告。
-            warnings.append(
+            output_warnings.append(
                 {
                     "code": video_music_provider["warning_code"],
                     "video_index": index,
                 }
             )
 
-        _progress += 50 / params.video_count / 2
-        sm.state.update_task(task_id, progress=_progress)
+        _mark_progress_step()
+        utils.log_runtime_benchmark(
+            "final_output",
+            output_started_at,
+            video_index=index,
+        )
+        return index, final_video_path, combined_video_path, output_warnings
 
-        final_video_paths.append(final_video_path)
-        combined_video_paths.append(combined_video_path)
+    def _record_result(result: tuple[int, str, str, list[dict]]) -> list[dict]:
+        index, final_video_path, combined_video_path, output_warnings = result
+        result_index = index - 1
+        final_video_paths[result_index] = final_video_path
+        combined_video_paths[result_index] = combined_video_path
+        return output_warnings
 
-    return final_video_paths, combined_video_paths, warnings
+    warnings_by_index: list[dict] = []
+    parallelism = _get_video_output_parallelism(video_count)
+    if parallelism <= 1:
+        for index in range(1, video_count + 1):
+            warnings_by_index.extend(_record_result(_render_one(index)))
+    else:
+        logger.info(
+            f"generating {video_count} final videos with parallelism={parallelism}"
+        )
+        futures = []
+        with ThreadPoolExecutor(
+            max_workers=parallelism,
+            thread_name_prefix="mpt-video-output",
+        ) as executor:
+            futures = [
+                executor.submit(_render_one, index)
+                for index in range(1, video_count + 1)
+            ]
+            try:
+                for future in as_completed(futures):
+                    warnings_by_index.extend(_record_result(future.result()))
+            except Exception:
+                for future in futures:
+                    future.cancel()
+                raise
+
+    warnings_by_index.sort(key=lambda warning: warning.get("video_index", 0))
+    return final_video_paths, combined_video_paths, warnings_by_index
 
 
 def _patch_cross_post_state(task_id: str, **kwargs) -> bool | None:

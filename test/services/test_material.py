@@ -75,6 +75,87 @@ class TestMaterialTlsVerification(unittest.TestCase):
         )
         self.assertEqual(results[0].source_info["rendition"]["id"], "987")
 
+    def test_search_pexels_selects_best_available_rendition(self):
+        """When exact target size is absent, choose the best target-or-better file."""
+        config.app["pexels_api_keys"] = ["pexels-key"]
+        config.proxy.clear()
+        fake_response = SimpleNamespace(
+            json=lambda: {
+                "videos": [
+                    {
+                        "id": 321,
+                        "url": "https://www.pexels.com/video/example-321/",
+                        "duration": 8,
+                        "user": {"name": "Creator"},
+                        "video_files": [
+                            {
+                                "id": "small",
+                                "width": 720,
+                                "height": 1280,
+                                "link": "https://example.com/small.mp4",
+                            },
+                            {
+                                "id": "large",
+                                "width": 1440,
+                                "height": 2560,
+                                "link": "https://example.com/large.mp4",
+                            },
+                            {
+                                "id": "huge",
+                                "width": 2160,
+                                "height": 3840,
+                                "link": "https://example.com/huge.mp4",
+                            },
+                        ],
+                    }
+                ]
+            }
+        )
+
+        with patch("app.services.material.requests.get", return_value=fake_response):
+            results = material.search_videos_pexels("cat", minimum_duration=1)
+
+        self.assertEqual(results[0].url, "https://example.com/large.mp4")
+        self.assertEqual(results[0].source_info["rendition"]["id"], "large")
+
+    def test_search_pixabay_prefers_matching_aspect_over_first_large_width(self):
+        """Pixabay response order should not make landscape files win portrait output."""
+        config.app["pixabay_api_keys"] = ["pixabay-key"]
+        config.proxy.clear()
+        fake_response = SimpleNamespace(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            json=lambda: {
+                "hits": [
+                    {
+                        "id": 123,
+                        "pageURL": "https://pixabay.com/videos/example-123/",
+                        "duration": 8,
+                        "user_id": 99,
+                        "user": "Creator",
+                        "videos": {
+                            "large_landscape": {
+                                "width": 1920,
+                                "height": 1080,
+                                "url": "https://example.com/landscape.mp4",
+                            },
+                            "portrait": {
+                                "width": 1080,
+                                "height": 1920,
+                                "url": "https://example.com/portrait.mp4",
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+
+        with patch("app.services.material.requests.get", return_value=fake_response):
+            results = material.search_videos_pixabay("city", minimum_duration=1)
+
+        self.assertEqual(results[0].url, "https://example.com/portrait.mp4")
+        self.assertEqual(results[0].source_info["rendition"]["id"], "portrait")
+
     def test_search_pixabay_allows_explicit_tls_disable_for_proxy(self):
         """
         少数企业代理会使用自签证书。该场景必须显式配置关闭 TLS 校验，
@@ -265,7 +346,12 @@ class TestMaterialTlsVerification(unittest.TestCase):
         config.app.pop("tls_verify", None)
         config.proxy.clear()
 
-        fake_response = SimpleNamespace(content=b"fake-video")
+        fake_response = SimpleNamespace(
+            content=b"fake-video",
+            iter_content=lambda chunk_size: [b"fake", b"-video"],
+            raise_for_status=lambda: None,
+            close=lambda: None,
+        )
 
         class FakeVideoFileClip:
             duration = 1
@@ -287,6 +373,7 @@ class TestMaterialTlsVerification(unittest.TestCase):
 
             self.assertTrue(os.path.exists(video_path))
             self.assertTrue(get.call_args.kwargs["verify"])
+            self.assertTrue(get.call_args.kwargs["stream"])
 
     def test_download_videos_accepts_plain_string_concat_mode(self):
         """

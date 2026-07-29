@@ -1,11 +1,16 @@
 import itertools
 import io
+import hashlib
+import json
+import math
 import os
 import random
 import gc
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unicodedata
 from contextlib import ExitStack, redirect_stdout
 from functools import lru_cache
@@ -49,6 +54,7 @@ class SubClippedVideoClip:
         height=None,
         duration=None,
         source_file_path=None,
+        delete_after_use=True,
     ):
         self.file_path = file_path
         self.start_time = start_time
@@ -56,6 +62,7 @@ class SubClippedVideoClip:
         self.width = width
         self.height = height
         self.source_file_path = source_file_path or file_path
+        self.delete_after_use = delete_after_use
         if duration is None:
             self.duration = end_time - start_time
         else:
@@ -81,6 +88,8 @@ _MIN_MATERIAL_DIMENSION = 480
 # 既能放行仅仅因为取整而略低于阈值的素材，也仍然能挡住真正的低清素材。
 _MIN_DIMENSION_TOLERANCE = 10
 _DEFAULT_VIDEO_CODEC = "libx264"
+_DEFAULT_VIDEO_QUALITY = "balanced"
+_DEFAULT_VIDEO_FILL_MODE = "letterbox"
 _SUPPORTED_VIDEO_CODECS = (
     "libx264",
     "h264_nvenc",
@@ -89,7 +98,33 @@ _SUPPORTED_VIDEO_CODECS = (
     "h264_mf",
     "h264_videotoolbox",
 )
+_SUPPORTED_VIDEO_QUALITY_PROFILES = {
+    # libx264 CRF defaults are tuned for generated 1080p short-form videos:
+    # lower CRF improves quality at the cost of larger files and somewhat more
+    # encode work. Hardware encoders use bitrate because constant-quality
+    # options differ too much across NVENC/AMF/QSV/VideoToolbox.
+    "draft": {
+        "libx264_crf": 23,
+        "libx264_preset": "veryfast",
+        "hardware_bitrate": "5000k",
+        "hardware_preset": "fast",
+    },
+    "balanced": {
+        "libx264_crf": 20,
+        "libx264_preset": "medium",
+        "hardware_bitrate": "8000k",
+        "hardware_preset": "medium",
+    },
+    "high": {
+        "libx264_crf": 18,
+        "libx264_preset": "slow",
+        "hardware_bitrate": "12000k",
+        "hardware_preset": "medium",
+    },
+}
+_SUPPORTED_VIDEO_FILL_MODES = ("letterbox", "crop")
 _runtime_disabled_video_codecs = set()
+_NORMALIZED_CLIP_CACHE_LOCKS = tuple(threading.Lock() for _ in range(256))
 
 
 def _get_required_video_duration(audio_duration: float) -> float:
@@ -186,6 +221,99 @@ def _get_configured_video_codec() -> str:
         )
         return _DEFAULT_VIDEO_CODEC
     return configured_codec
+
+
+def _get_configured_video_quality() -> str:
+    configured_quality = str(
+        config.app.get("video_quality", _DEFAULT_VIDEO_QUALITY) or _DEFAULT_VIDEO_QUALITY
+    ).strip().lower()
+    if configured_quality not in _SUPPORTED_VIDEO_QUALITY_PROFILES:
+        logger.warning(
+            f"unsupported video quality configured: {configured_quality}, "
+            f"fallback to {_DEFAULT_VIDEO_QUALITY}"
+        )
+        return _DEFAULT_VIDEO_QUALITY
+    return configured_quality
+
+
+def _get_video_quality_profile() -> dict:
+    return _SUPPORTED_VIDEO_QUALITY_PROFILES[_get_configured_video_quality()]
+
+
+def _get_configured_video_fill_mode() -> str:
+    fill_mode = str(
+        config.app.get("video_fill_mode", _DEFAULT_VIDEO_FILL_MODE)
+        or _DEFAULT_VIDEO_FILL_MODE
+    ).strip().lower()
+    if fill_mode not in _SUPPORTED_VIDEO_FILL_MODES:
+        logger.warning(
+            f"unsupported video fill mode configured: {fill_mode}, "
+            f"fallback to {_DEFAULT_VIDEO_FILL_MODE}"
+        )
+        return _DEFAULT_VIDEO_FILL_MODE
+    return fill_mode
+
+
+def _get_video_encoder_preset(codec: str) -> str:
+    configured_preset = str(config.app.get("video_encode_preset", "") or "").strip()
+    if configured_preset:
+        return configured_preset
+
+    profile = _get_video_quality_profile()
+    if codec == _DEFAULT_VIDEO_CODEC:
+        return str(profile["libx264_preset"])
+    return str(profile["hardware_preset"])
+
+
+def _get_video_bitrate(codec: str) -> str | None:
+    configured_bitrate = str(config.app.get("video_bitrate", "") or "").strip()
+    if configured_bitrate:
+        return configured_bitrate
+    if codec != _DEFAULT_VIDEO_CODEC:
+        return str(_get_video_quality_profile()["hardware_bitrate"])
+    return None
+
+
+def _get_libx264_crf() -> int:
+    configured_crf = config.app.get("video_crf")
+    if configured_crf not in (None, ""):
+        try:
+            return max(0, min(51, int(configured_crf)))
+        except (TypeError, ValueError):
+            logger.warning(
+                f"unsupported video_crf configured: {configured_crf}, "
+                "using quality profile default"
+            )
+    return int(_get_video_quality_profile()["libx264_crf"])
+
+
+def _ffmpeg_video_quality_args(codec: str) -> list[str]:
+    args: list[str] = ["-preset", _get_video_encoder_preset(codec)]
+    bitrate = _get_video_bitrate(codec)
+    if bitrate:
+        args.extend(["-b:v", bitrate])
+    if codec == _DEFAULT_VIDEO_CODEC:
+        args.extend(["-crf", str(_get_libx264_crf())])
+    args.extend(["-pix_fmt", "yuv420p", "-movflags", "+faststart"])
+    return args
+
+
+def _moviepy_write_kwargs(codec: str, kwargs: dict) -> dict:
+    write_kwargs = dict(kwargs)
+    write_kwargs.setdefault("preset", _get_video_encoder_preset(codec))
+    write_kwargs.setdefault("pixel_format", "yuv420p")
+
+    bitrate = _get_video_bitrate(codec)
+    if bitrate:
+        write_kwargs.setdefault("bitrate", bitrate)
+
+    ffmpeg_params = list(write_kwargs.pop("ffmpeg_params", []) or [])
+    quality_params = ["-movflags", "+faststart"]
+    if codec == _DEFAULT_VIDEO_CODEC:
+        quality_params = ["-crf", str(_get_libx264_crf()), *quality_params]
+    # Defaults go first so explicit caller params can still override them.
+    write_kwargs["ffmpeg_params"] = quality_params + ffmpeg_params
+    return write_kwargs
 
 
 @lru_cache(maxsize=16)
@@ -285,7 +413,11 @@ def _fallback_write_videofile(clip, output_file: str, failed_codec: str, reason:
     文件被占用、目录权限、杀软拦截等通用 IO 问题。只有 libx264 能成功写出时，
     才能判断原始失败大概率来自硬件编码器本身，避免误伤后续任务。
     """
-    clip.write_videofile(output_file, codec=_DEFAULT_VIDEO_CODEC, **kwargs)
+    clip.write_videofile(
+        output_file,
+        codec=_DEFAULT_VIDEO_CODEC,
+        **_moviepy_write_kwargs(_DEFAULT_VIDEO_CODEC, kwargs),
+    )
     _disable_runtime_video_codec(failed_codec, reason)
     return _DEFAULT_VIDEO_CODEC
 
@@ -299,7 +431,11 @@ def _write_videofile_with_codec_fallback(clip, output_file: str, codec: str, **k
     """
     effective_codec = _get_effective_video_codec(codec)
     try:
-        clip.write_videofile(output_file, codec=effective_codec, **kwargs)
+        clip.write_videofile(
+            output_file,
+            codec=effective_codec,
+            **_moviepy_write_kwargs(effective_codec, kwargs),
+        )
         return effective_codec
     except Exception as exc:
         if effective_codec == _DEFAULT_VIDEO_CODEC:
@@ -336,13 +472,14 @@ def concat_video_clips_with_ffmpeg(
     threads: int,
     output_dir: str,
     max_duration: float | None = None,
+    stream_copy: bool = False,
 ):
     concat_list_file = os.path.join(output_dir, "ffmpeg-concat-list.txt")
     with open(concat_list_file, "w", encoding="utf-8") as fp:
         for clip_file in clip_files:
             fp.write(f"file '{_format_ffmpeg_concat_path(clip_file)}'\n")
 
-    def build_command(codec: str) -> list[str]:
+    def build_encode_command(codec: str) -> list[str]:
         command = [
             utils.get_ffmpeg_binary(),
             "-y",
@@ -354,20 +491,32 @@ def concat_video_clips_with_ffmpeg(
             concat_list_file,
             "-c:v",
             codec,
-            "-threads",
-            str(threads or 2),
-            "-pix_fmt",
-            "yuv420p",
         ]
         if max_duration is not None and max_duration > 0:
             command.extend(["-t", f"{max_duration:.3f}"])
+        command.extend(_ffmpeg_video_quality_args(codec))
+        command.extend(["-threads", str(threads or 2)])
         command.append(output_file)
         return command
 
-    def run_concat(codec: str):
-        command = build_command(codec)
-        # 使用 ffmpeg 只做一次串联与编码，避免 MoviePy 逐段合并时反复重编码，
-        # 从而降低画质劣化与颜色偏移风险。
+    def build_stream_copy_command() -> list[str]:
+        command = [
+            utils.get_ffmpeg_binary(),
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_list_file,
+        ]
+        if max_duration is not None and max_duration > 0:
+            command.extend(["-t", f"{max_duration:.3f}"])
+        command.extend(["-c", "copy", "-movflags", "+faststart"])
+        command.append(output_file)
+        return command
+
+    def run_command(command: list[str], label: str):
         result = subprocess.run(
             command,
             capture_output=True,
@@ -376,10 +525,28 @@ def concat_video_clips_with_ffmpeg(
         )
         if result.returncode != 0:
             error_message = (result.stderr or result.stdout or "").strip()
-            raise RuntimeError(error_message or "ffmpeg concat failed")
+            raise RuntimeError(error_message or f"ffmpeg concat {label} failed")
+        return label
+
+    def run_concat(codec: str):
+        # 使用 ffmpeg 只做一次串联与编码，避免 MoviePy 逐段合并时反复重编码，
+        # 从而降低画质劣化与颜色偏移风险。
+        run_command(build_encode_command(codec), codec)
         return codec
 
     try:
+        if stream_copy:
+            try:
+                # Temp clips generated by combine_videos are already normalized
+                # to the same frame size, fps and pixel format. Stream-copying
+                # avoids an otherwise redundant lossy encode.
+                return run_command(build_stream_copy_command(), "copy")
+            except Exception as exc:
+                logger.warning(
+                    "ffmpeg stream-copy concat failed, fallback to encoded concat: "
+                    f"{str(exc)}"
+                )
+
         effective_codec = _get_effective_video_codec()
         try:
             return run_concat(effective_codec)
@@ -536,6 +703,237 @@ def get_bgm_file(bgm_type: str = "random", bgm_file: str = ""):
     return ""
 
 
+def _fit_clip_to_frame(clip, target_size: tuple[int, int]):
+    video_width, video_height = target_size
+    clip_w, clip_h = clip.size
+    if clip_w == video_width and clip_h == video_height:
+        return clip
+
+    clip_ratio = clip_w / clip_h
+    video_ratio = video_width / video_height
+    logger.debug(
+        f"resizing clip, source: {clip_w}x{clip_h}, ratio: {clip_ratio:.2f}, "
+        f"target: {video_width}x{video_height}, ratio: {video_ratio:.2f}"
+    )
+
+    if clip_ratio == video_ratio:
+        return clip.resized(new_size=(video_width, video_height))
+
+    fill_mode = _get_configured_video_fill_mode()
+    if fill_mode == "crop":
+        scale_factor = max(video_width / clip_w, video_height / clip_h)
+        new_width = max(video_width, int(round(clip_w * scale_factor)))
+        new_height = max(video_height, int(round(clip_h * scale_factor)))
+        return (
+            clip.resized(new_size=(new_width, new_height))
+            .cropped(
+                x_center=new_width // 2,
+                y_center=new_height // 2,
+                width=video_width,
+                height=video_height,
+            )
+            .with_duration(clip.duration)
+        )
+
+    if clip_ratio > video_ratio:
+        scale_factor = video_width / clip_w
+    else:
+        scale_factor = video_height / clip_h
+
+    new_width = int(clip_w * scale_factor)
+    new_height = int(clip_h * scale_factor)
+
+    background = ColorClip(
+        size=(video_width, video_height),
+        color=(0, 0, 0),
+    ).with_duration(clip.duration)
+    clip_resized = clip.resized(new_size=(new_width, new_height)).with_position("center")
+    return CompositeVideoClip([background, clip_resized]).with_duration(clip.duration)
+
+
+def _source_clip_cache_identity(file_path: str) -> dict:
+    source_path = os.path.realpath(file_path)
+    basename = os.path.basename(source_path)
+    stem, extension = os.path.splitext(basename)
+    stock_url_hash = stem.removeprefix("vid-")
+
+    try:
+        stat = os.stat(source_path)
+        if (
+            extension.lower() == ".mp4"
+            and stem.startswith("vid-")
+            and len(stock_url_hash) == 64
+            and all(char in "0123456789abcdef" for char in stock_url_hash.lower())
+        ):
+            return {
+                "stock_url_hash": stock_url_hash.lower(),
+                "size": stat.st_size,
+            }
+        return {
+            "path": source_path,
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+    except OSError:
+        if (
+            extension.lower() == ".mp4"
+            and stem.startswith("vid-")
+            and len(stock_url_hash) == 64
+            and all(char in "0123456789abcdef" for char in stock_url_hash.lower())
+        ):
+            return {"stock_url_hash": stock_url_hash.lower()}
+        return {"path": source_path}
+
+
+def _normalized_clip_cache_payload(
+    subclipped_item: SubClippedVideoClip,
+    target_size: tuple[int, int],
+    normalized_clip_speed: float,
+    max_clip_duration: int,
+) -> dict:
+    codec = _get_configured_video_codec()
+    return {
+        "version": 1,
+        "source": _source_clip_cache_identity(subclipped_item.source_file_path),
+        "start_time": round(float(subclipped_item.start_time or 0), 3),
+        "end_time": round(float(subclipped_item.end_time or 0), 3),
+        "target_size": [int(target_size[0]), int(target_size[1])],
+        "fps": fps,
+        "speed": round(float(normalized_clip_speed), 4),
+        "max_clip_duration": int(max_clip_duration),
+        "fill_mode": _get_configured_video_fill_mode(),
+        "codec": codec,
+        "quality": _get_configured_video_quality(),
+        "preset": _get_video_encoder_preset(codec),
+        "crf": _get_libx264_crf() if codec == _DEFAULT_VIDEO_CODEC else None,
+        "bitrate": _get_video_bitrate(codec),
+    }
+
+
+def _normalized_clip_cache_key(payload: dict) -> str:
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _normalized_clip_cache_paths(cache_key: str) -> tuple[str, str]:
+    cache_dir = utils.storage_dir("cache_normalized_clips", create=True)
+    return (
+        os.path.join(cache_dir, f"norm-{cache_key}.mp4"),
+        os.path.join(cache_dir, f"norm-{cache_key}.json"),
+    )
+
+
+def _normalized_clip_cache_lock(cache_key: str) -> threading.Lock:
+    return _NORMALIZED_CLIP_CACHE_LOCKS[
+        int(cache_key[:8], 16) % len(_NORMALIZED_CLIP_CACHE_LOCKS)
+    ]
+
+
+def _load_normalized_clip_cache(
+    cache_path: str,
+    metadata_path: str,
+    payload: dict,
+) -> tuple[str, float] | None:
+    if not (
+        os.path.exists(cache_path)
+        and os.path.getsize(cache_path) > 0
+        and os.path.exists(metadata_path)
+    ):
+        return None
+
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as fp:
+            metadata = json.load(fp)
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            f"failed to read normalized clip cache metadata, refreshing cache: {exc}"
+        )
+        return None
+
+    duration = metadata.get("duration")
+    if metadata.get("payload") != payload or not isinstance(duration, (int, float)):
+        return None
+    if duration <= 0:
+        return None
+    return cache_path, float(duration)
+
+
+def _write_normalized_clip_metadata(
+    metadata_path: str,
+    payload: dict,
+    duration: float,
+) -> None:
+    metadata = {
+        "payload": payload,
+        "duration": float(duration),
+    }
+    temp_metadata_path = f"{metadata_path}.{os.getpid()}-{threading.get_ident()}.tmp"
+    with open(temp_metadata_path, "w", encoding="utf-8") as fp:
+        json.dump(metadata, fp, ensure_ascii=False, sort_keys=True)
+    os.replace(temp_metadata_path, metadata_path)
+
+
+def _get_or_create_normalized_clip(
+    subclipped_item: SubClippedVideoClip,
+    target_size: tuple[int, int],
+    normalized_clip_speed: float,
+    max_clip_duration: int,
+    threads: int,
+) -> tuple[str, float, bool]:
+    payload = _normalized_clip_cache_payload(
+        subclipped_item,
+        target_size,
+        normalized_clip_speed,
+        max_clip_duration,
+    )
+    cache_key = _normalized_clip_cache_key(payload)
+    cache_path, metadata_path = _normalized_clip_cache_paths(cache_key)
+
+    with _normalized_clip_cache_lock(cache_key):
+        cached = _load_normalized_clip_cache(cache_path, metadata_path, payload)
+        if cached:
+            logger.debug(f"normalized clip cache hit: {os.path.basename(cache_path)}")
+            return cached[0], cached[1], True
+
+        temp_cache_path = (
+            f"{cache_path}.{os.getpid()}-{threading.get_ident()}.tmp.mp4"
+        )
+        delete_files(temp_cache_path)
+        clip = None
+        try:
+            clip = _open_video_clip_quietly(subclipped_item.file_path).subclipped(
+                subclipped_item.start_time,
+                subclipped_item.end_time,
+            )
+            if normalized_clip_speed != 1.0:
+                clip = clip.with_speed_scaled(normalized_clip_speed)
+            clip = _fit_clip_to_frame(clip, target_size)
+            if clip.duration > max_clip_duration:
+                clip = clip.subclipped(0, max_clip_duration)
+
+            _write_videofile_with_codec_fallback(
+                clip,
+                temp_cache_path,
+                codec=_get_configured_video_codec(),
+                logger=None,
+                fps=fps,
+                threads=threads or 2,
+            )
+            clip_duration = float(clip.duration)
+            os.replace(temp_cache_path, cache_path)
+            _write_normalized_clip_metadata(metadata_path, payload, clip_duration)
+            logger.debug(f"normalized clip cache miss: {os.path.basename(cache_path)}")
+            return cache_path, clip_duration, False
+        finally:
+            close_clip(clip)
+            delete_files(temp_cache_path)
+
+
 def combine_videos(
     combined_video_path: str,
     video_paths: List[str],
@@ -621,6 +1019,9 @@ def combine_videos(
     logger.debug(f"total subclipped items: {len(subclipped_items)}")
     
     # Add downloaded clips over and over until the duration of the audio (max_duration) has been reached
+    normalize_started_at = time.perf_counter()
+    normalized_cache_hits = 0
+    normalized_cache_misses = 0
     for i, subclipped_item in enumerate(subclipped_items):
         if video_duration >= required_video_duration:
             break
@@ -632,42 +1033,41 @@ def combine_videos(
             f"remaining: {required_video_duration - video_duration:.2f}s"
         )
         
+        clip = None
         try:
-            clip = _open_video_clip_quietly(subclipped_item.file_path).subclipped(
-                subclipped_item.start_time, subclipped_item.end_time
+            (
+                normalized_clip_path,
+                normalized_clip_duration,
+                normalized_cache_hit,
+            ) = _get_or_create_normalized_clip(
+                subclipped_item=subclipped_item,
+                target_size=(video_width, video_height),
+                normalized_clip_speed=normalized_clip_speed,
+                max_clip_duration=max_clip_duration,
+                threads=threads,
             )
-            # 播放速度属于素材本身属性，应在转场前应用。这样 Fade/Slide 等一秒转场
-            # 不会跟随素材速度变成 0.5 秒或 2 秒；后续最大时长裁剪继续作为
-            # 浮点误差或异常素材时长的安全兜底，保证最终片段不突破配置上限。
-            if normalized_clip_speed != 1.0:
-                clip = clip.with_speed_scaled(normalized_clip_speed)
-            clip_duration = clip.duration
-            # Not all videos are same size, so we need to resize them
-            clip_w, clip_h = clip.size
-            if clip_w != video_width or clip_h != video_height:
-                clip_ratio = clip.w / clip.h
-                video_ratio = video_width / video_height
-                logger.debug(f"resizing clip, source: {clip_w}x{clip_h}, ratio: {clip_ratio:.2f}, target: {video_width}x{video_height}, ratio: {video_ratio:.2f}")
-                
-                if clip_ratio == video_ratio:
-                    clip = clip.resized(new_size=(video_width, video_height))
-                else:
-                    if clip_ratio > video_ratio:
-                        scale_factor = video_width / clip_w
-                    else:
-                        scale_factor = video_height / clip_h
+            if normalized_cache_hit:
+                normalized_cache_hits += 1
+            else:
+                normalized_cache_misses += 1
 
-                    new_width = int(clip_w * scale_factor)
-                    new_height = int(clip_h * scale_factor)
-
-                    background = ColorClip(size=(video_width, video_height), color=(0, 0, 0)).with_duration(clip_duration)
-                    clip_resized = clip.resized(new_size=(new_width, new_height)).with_position("center")
-                    clip = CompositeVideoClip([background, clip_resized])
-                    
-            shuffle_side = random.choice(["left", "right", "top", "bottom"])
             if transition_value in (None, VideoTransitionMode.none.value):
-                clip = clip
-            elif transition_value == VideoTransitionMode.fade_in.value:
+                processed_clips.append(
+                    SubClippedVideoClip(
+                        file_path=normalized_clip_path,
+                        duration=normalized_clip_duration,
+                        width=video_width,
+                        height=video_height,
+                        source_file_path=subclipped_item.source_file_path,
+                        delete_after_use=False,
+                    )
+                )
+                video_duration += normalized_clip_duration
+                continue
+
+            clip = _open_video_clip_quietly(normalized_clip_path)
+            shuffle_side = random.choice(["left", "right", "top", "bottom"])
+            if transition_value == VideoTransitionMode.fade_in.value:
                 clip = video_effects.fadein_transition(clip, 1)
             elif transition_value == VideoTransitionMode.fade_out.value:
                 clip = video_effects.fadeout_transition(clip, 1)
@@ -702,25 +1102,37 @@ def combine_videos(
                 codec=_get_configured_video_codec(),
                 logger=None,
                 fps=fps,
+                threads=threads or 2,
             )
 
             # Store clip duration before closing
-            clip_duration_saved = clip.duration
+            clip_duration_saved = float(clip.duration)
             close_clip(clip)
+            clip = None
 
             processed_clips.append(
                 SubClippedVideoClip(
                     file_path=clip_file,
                     duration=clip_duration_saved,
-                    width=clip_w,
-                    height=clip_h,
+                    width=video_width,
+                    height=video_height,
                     source_file_path=subclipped_item.source_file_path,
+                    delete_after_use=True,
                 )
             )
             video_duration += clip_duration_saved
             
         except Exception as e:
+            close_clip(clip)
             logger.error(f"failed to process clip: {str(e)}")
+
+    utils.log_runtime_benchmark(
+        "normalize",
+        normalize_started_at,
+        clips=len(processed_clips),
+        cache_hits=normalized_cache_hits,
+        cache_misses=normalized_cache_misses,
+    )
     
     # loop processed clips until the video duration covers the audio duration and the small safety margin.
     if video_duration < required_video_duration:
@@ -748,16 +1160,28 @@ def combine_videos(
     
     clip_files = [clip.file_path for clip in processed_clips]
     logger.info(f"concatenating {len(clip_files)} clips with ffmpeg")
-    concat_video_clips_with_ffmpeg(
-        clip_files=clip_files,
-        output_file=combined_video_path,
-        threads=threads,
-        output_dir=output_dir,
-        max_duration=audio_duration,
-    )
-    
-    # clean temp files
-    delete_files(clip_files)
+    temp_clip_files = [
+        clip.file_path for clip in processed_clips if clip.delete_after_use
+    ]
+    concat_started_at = time.perf_counter()
+    try:
+        concat_video_clips_with_ffmpeg(
+            clip_files=clip_files,
+            output_file=combined_video_path,
+            threads=threads,
+            output_dir=output_dir,
+            max_duration=audio_duration,
+            stream_copy=True,
+        )
+        utils.log_runtime_benchmark(
+            "concat",
+            concat_started_at,
+            clips=len(clip_files),
+        )
+    finally:
+        # clean only per-task transition temp files; normalized cache entries
+        # are shared across future generations.
+        delete_files(temp_clip_files)
             
     logger.info("video combining completed")
     return combined_video_path
@@ -926,6 +1350,74 @@ def subtitle_colors_are_indistinguishable(params: VideoParams) -> bool:
     text_color = normalize_color(params.text_fore_color)
     background_color = normalize_color(params.text_background_color)
     return bool(text_color and text_color == background_color)
+
+
+def _normalize_audio_volume(volume: float | None) -> float:
+    try:
+        normalized = float(volume)
+    except (TypeError, ValueError):
+        return 1.0
+    if not math.isfinite(normalized):
+        return 1.0
+    return max(0.0, normalized)
+
+
+def _has_rendered_subtitles(params: VideoParams, subtitle_path: str) -> bool:
+    # Keep generate_video's historical behavior: if a subtitle file reaches this
+    # stage, it is burned in. Most callers pass an empty path when subtitles are
+    # disabled, but this guard must match the renderer, not just the flag.
+    return bool(subtitle_path and os.path.exists(subtitle_path))
+
+
+def _mux_video_with_audio_stream_copy(
+    video_path: str,
+    audio_path: str,
+    output_file: str,
+    params: VideoParams,
+) -> None:
+    temp_output = f"{output_file}.muxing.mp4"
+    delete_files(temp_output)
+
+    command = [
+        utils.get_ffmpeg_binary(),
+        "-y",
+        "-i",
+        video_path,
+        "-i",
+        audio_path,
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        audio_codec,
+        "-b:a",
+        audio_bitrate,
+        "-shortest",
+        "-movflags",
+        "+faststart",
+    ]
+    voice_volume = _normalize_audio_volume(params.voice_volume)
+    if abs(voice_volume - 1.0) > 0.001:
+        command.extend(["-filter:a", f"volume={voice_volume:.6f}"])
+    command.append(temp_output)
+
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            error_message = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(error_message or "ffmpeg final mux failed")
+        os.replace(temp_output, output_file)
+    except Exception:
+        delete_files(temp_output)
+        raise
 
 
 @lru_cache(maxsize=64)
@@ -1166,6 +1658,50 @@ def generate_video(
             _clip = _clip.with_position(("center", "center"))
         return _clip
 
+    bgm_enabled = bgm_service.should_use_bgm(params.bgm_type, params.bgm_volume)
+    if not bgm_enabled and params.bgm_type:
+        # 所有 BGM 来源共用这一条短路规则。音量不大于 0 时不能解析随机或
+        # 自定义文件，也不能加载提供商返回的文件，避免无意义的 IO 和混音。
+        logger.info(
+            f"skipping background music because volume is not positive: "
+            f"type={params.bgm_type}, volume={params.bgm_volume}"
+        )
+
+    # 提供商配乐可由任务编排层直接传入对应文件。None 表示沿用随机/自定义
+    # BGM 解析，空字符串明确禁用本条 BGM；但任何来源都必须先通过通用音量规则。
+    bgm_file = ""
+    if bgm_enabled:
+        bgm_file = (
+            bgm_file_override
+            if bgm_file_override is not None
+            else get_bgm_file(
+                bgm_type=params.bgm_type,
+                bgm_file=params.bgm_file,
+            )
+        )
+
+    if not bgm_file and not _has_rendered_subtitles(params, subtitle_path):
+        final_mux_started_at = time.perf_counter()
+        try:
+            _mux_video_with_audio_stream_copy(
+                video_path=video_path,
+                audio_path=audio_path,
+                output_file=output_file,
+                params=params,
+            )
+            utils.log_runtime_benchmark(
+                "final_mux",
+                final_mux_started_at,
+                mode="stream_copy",
+            )
+            logger.info("generated final video with stream-copy video mux")
+            return True
+        except Exception as exc:
+            logger.warning(
+                "stream-copy final mux failed, fallback to MoviePy render: "
+                f"{str(exc)}"
+            )
+
     # MoviePy 的 CompositeAudioClip.close() 不会关闭子 AudioFileClip。这里用
     # ExitStack 显式持有所有原始文件 reader，确保成功、字幕异常、混音失败和
     # 视频写入失败等路径都能释放 FFmpeg 子进程，尤其避免 Windows 文件被占用。
@@ -1201,29 +1737,6 @@ def generate_video(
             video_clip = CompositeVideoClip([video_clip, *text_clips])
             clip_stack.callback(video_clip.close)
 
-        bgm_enabled = bgm_service.should_use_bgm(
-            params.bgm_type, params.bgm_volume
-        )
-        if not bgm_enabled and params.bgm_type:
-            # 所有 BGM 来源共用这一条短路规则。音量不大于 0 时不能解析随机或
-            # 自定义文件，也不能加载提供商返回的文件，避免无意义的 IO 和混音。
-            logger.info(
-                f"skipping background music because volume is not positive: "
-                f"type={params.bgm_type}, volume={params.bgm_volume}"
-            )
-
-        # 提供商配乐可由任务编排层直接传入对应文件。None 表示沿用随机/自定义
-        # BGM 解析，空字符串明确禁用本条 BGM；但任何来源都必须先通过通用音量规则。
-        bgm_file = ""
-        if bgm_enabled:
-            bgm_file = (
-                bgm_file_override
-                if bgm_file_override is not None
-                else get_bgm_file(
-                    bgm_type=params.bgm_type,
-                    bgm_file=params.bgm_file,
-                )
-            )
         bgm_mix_succeeded = True
         if bgm_file:
             try:
@@ -1253,6 +1766,7 @@ def generate_video(
         # 显式沿用输入音频的采样率；如果取不到，再回退 MoviePy 默认的 44100Hz。
         # 这样可以减少不同环境，尤其 Docker 中再次重采样带来的音质波动。
         output_audio_fps = int(getattr(audio_clip, "fps", 0) or 44100)
+        final_render_started_at = time.perf_counter()
         _write_videofile_with_codec_fallback(
             final_video_clip,
             output_file=output_file,
@@ -1264,6 +1778,13 @@ def generate_video(
             threads=params.n_threads or 2,
             logger=None,
             fps=fps,
+        )
+        utils.log_runtime_benchmark(
+            "final_render",
+            final_render_started_at,
+            mode="moviepy",
+            subtitles=bool(subtitle_path and os.path.exists(subtitle_path)),
+            bgm=bool(bgm_file),
         )
         return bgm_mix_succeeded
 
@@ -1373,17 +1894,8 @@ def video_to_normalized_clip(
         if clip.duration < duration:
             # Fallback loop via concatenation-free tiling using freeze of frames.
             clip = clip.with_duration(duration)
-        if clip_w != video_width or clip_h != video_height:
-            scale = min(video_width / clip_w, video_height / clip_h)
-            new_w, new_h = int(clip_w * scale), int(clip_h * scale)
-            background = ColorClip(
-                size=(video_width, video_height), color=(0, 0, 0)
-            ).with_duration(clip.duration)
-            resized = clip.resized(new_size=(new_w, new_h)).with_position("center")
-            fitted = CompositeVideoClip([background, resized]).with_duration(clip.duration)
-            render_clip = fitted
-        else:
-            render_clip = clip
+        fitted = _fit_clip_to_frame(clip, (video_width, video_height))
+        render_clip = fitted
         _write_videofile_with_codec_fallback(
             render_clip,
             output_path,
@@ -1536,7 +2048,13 @@ def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
 
                 # Output the video to a file.
                 video_file = f"{material_source_path}.mp4"
-                final_clip.write_videofile(video_file, fps=30, logger=None)
+                _write_videofile_with_codec_fallback(
+                    final_clip,
+                    video_file,
+                    codec=_get_configured_video_codec(),
+                    fps=fps,
+                    logger=None,
+                )
                 close_clip(clip)
                 close_clip(final_clip)
                 material.url = video_file

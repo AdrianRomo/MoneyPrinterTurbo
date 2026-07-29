@@ -223,7 +223,7 @@ class TestVideoService(unittest.TestCase):
                         vd,
                         "_open_video_clip_quietly",
                         return_value=source_video,
-                    ),
+                    ) as open_video,
                     patch.object(
                         vd, "AudioFileClip", return_value=voice_source
                     ) as audio_file_clip,
@@ -232,6 +232,7 @@ class TestVideoService(unittest.TestCase):
                     patch.object(
                         vd, "_write_videofile_with_codec_fallback"
                     ) as writer,
+                    patch.object(vd, "_mux_video_with_audio_stream_copy") as mux,
                     patch.object(
                         vd, "_get_configured_video_codec", return_value="libx264"
                     ),
@@ -246,13 +247,12 @@ class TestVideoService(unittest.TestCase):
                     )
 
                 self.assertTrue(result)
-                audio_file_clip.assert_called_once_with("voice.mp3")
+                mux.assert_called_once()
+                open_video.assert_not_called()
+                audio_file_clip.assert_not_called()
                 get_bgm_file.assert_not_called()
                 composite_audio.assert_not_called()
-                writer.assert_called_once()
-                self.assertEqual(source_video.close_calls, 1)
-                self.assertEqual(voice_source.close_calls, 1)
-                self.assertEqual(final_video.close_calls, 1)
+                writer.assert_not_called()
 
     def test_generate_video_chooses_looping_by_bgm_file_source(self):
         """默认曲库需要循环，任务层提供的时长适配文件不应依赖提供商名称。"""
@@ -449,6 +449,28 @@ class TestVideoService(unittest.TestCase):
 
         self.assertEqual(vd._get_configured_video_codec(), "libx264")
 
+    def test_moviepy_write_kwargs_apply_quality_profile(self):
+        """libx264 writes should get deterministic CRF/preset quality defaults."""
+        config.app["video_quality"] = "high"
+
+        kwargs = vd._moviepy_write_kwargs("libx264", {"logger": None})
+
+        self.assertEqual(kwargs["preset"], "slow")
+        self.assertEqual(kwargs["pixel_format"], "yuv420p")
+        self.assertIn("-crf", kwargs["ffmpeg_params"])
+        crf_index = kwargs["ffmpeg_params"].index("-crf") + 1
+        self.assertEqual(kwargs["ffmpeg_params"][crf_index], "18")
+
+    def test_moviepy_write_kwargs_use_hardware_bitrate_profile(self):
+        """Hardware encoders use bitrate defaults because CRF/CQ flags differ."""
+        config.app["video_quality"] = "balanced"
+
+        kwargs = vd._moviepy_write_kwargs("h264_nvenc", {"logger": None})
+
+        self.assertEqual(kwargs["preset"], "medium")
+        self.assertEqual(kwargs["bitrate"], "8000k")
+        self.assertNotIn("-crf", kwargs["ffmpeg_params"])
+
     def test_ffmpeg_encoder_exists_falls_back_when_probe_fails(self):
         """
         Windows 上用户配置的 ffmpeg 可能因为路径损坏、权限或杀软拦截而无法
@@ -568,6 +590,59 @@ class TestVideoService(unittest.TestCase):
         ]
         self.assertEqual(used_codecs, ["h264_nvenc", "libx264"])
         self.assertIn("h264_nvenc", vd._runtime_disabled_video_codecs)
+
+    def test_concat_video_clips_stream_copies_when_requested(self):
+        """Already-normalized temp clips should concatenate without re-encoding."""
+
+        def fake_run(command, capture_output, text, check):
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            clip_file = os.path.join(temp_dir, "clip.mp4")
+            output_file = os.path.join(temp_dir, "combined.mp4")
+            Path(clip_file).write_bytes(b"fake")
+
+            with patch.object(vd.subprocess, "run", side_effect=fake_run) as run:
+                result = vd.concat_video_clips_with_ffmpeg(
+                    clip_files=[clip_file],
+                    output_file=output_file,
+                    threads=1,
+                    output_dir=temp_dir,
+                    stream_copy=True,
+                )
+
+        self.assertEqual(result, "copy")
+        command = run.call_args.args[0]
+        self.assertIn("-c", command)
+        self.assertEqual(command[command.index("-c") + 1], "copy")
+        self.assertNotIn("-c:v", command)
+
+    def test_concat_video_clips_falls_back_when_stream_copy_fails(self):
+        """Stream-copy failures should fall back to the encoded concat path."""
+
+        def fake_run(command, capture_output, text, check):
+            if "-c" in command and command[command.index("-c") + 1] == "copy":
+                return types.SimpleNamespace(returncode=1, stdout="", stderr="copy failed")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            clip_file = os.path.join(temp_dir, "clip.mp4")
+            output_file = os.path.join(temp_dir, "combined.mp4")
+            Path(clip_file).write_bytes(b"fake")
+
+            with patch.object(vd.subprocess, "run", side_effect=fake_run) as run:
+                result = vd.concat_video_clips_with_ffmpeg(
+                    clip_files=[clip_file],
+                    output_file=output_file,
+                    threads=1,
+                    output_dir=temp_dir,
+                    stream_copy=True,
+                )
+
+        self.assertEqual(result, "libx264")
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(commands[0][commands[0].index("-c") + 1], "copy")
+        self.assertEqual(commands[1][commands[1].index("-c:v") + 1], "libx264")
 
     def test_concat_video_clips_does_not_disable_codec_when_fallback_also_fails(self):
         """
@@ -735,18 +810,35 @@ class TestVideoService(unittest.TestCase):
             def with_speed_scaled(self, factor):
                 return _FakeVideoClip(self.duration / factor)
 
+            def resized(self, new_size):
+                resized_clip = _FakeVideoClip(self.duration)
+                resized_clip.size = new_size
+                resized_clip.w, resized_clip.h = new_size
+                return resized_clip
+
             def close(self):
                 pass
 
         def _open_fake_video_clip(_video_path):
             return _FakeVideoClip(source_duration, records_source_range=True)
 
-        def _capture_written_clip(clip, *_args, **_kwargs):
+        def _capture_written_clip(clip, output_file, *_args, **_kwargs):
             written_durations.append(clip.duration)
+            Path(output_file).write_bytes(b"fake video")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             combined_video_path = os.path.join(temp_dir, "combined.mp4")
+
+            def _storage_dir(sub_dir="", create=False):
+                storage_path = Path(temp_dir) / "storage"
+                if sub_dir:
+                    storage_path = storage_path / sub_dir
+                if create:
+                    storage_path.mkdir(parents=True, exist_ok=True)
+                return str(storage_path)
+
             with (
+                patch.object(vd.utils, "storage_dir", side_effect=_storage_dir),
                 patch.object(vd, "AudioFileClip", return_value=_FakeAudioClip()),
                 patch.object(
                     vd,
@@ -803,6 +895,97 @@ class TestVideoService(unittest.TestCase):
         self.assertEqual(source_ranges, [(0, 6.0)])
         self.assertEqual(written_durations, [3.0])
 
+    def test_combine_videos_reuses_normalized_clip_cache(self):
+        """相同素材切片和渲染参数重复生成时应复用归一化缓存。"""
+
+        class _FakeAudioClip:
+            duration = 1.0
+
+            def close(self):
+                pass
+
+        class _FakeVideoClip:
+            def __init__(self, duration):
+                self.duration = duration
+                self.size = (1080, 1920)
+                self.w = 1080
+                self.h = 1920
+
+            def subclipped(self, start_time, end_time):
+                return _FakeVideoClip(end_time - start_time)
+
+            def resized(self, new_size):
+                resized_clip = _FakeVideoClip(self.duration)
+                resized_clip.size = new_size
+                resized_clip.w, resized_clip.h = new_size
+                return resized_clip
+
+            def close(self):
+                pass
+
+        def _open_fake_video_clip(_video_path):
+            return _FakeVideoClip(3.0)
+
+        def _write_fake_clip(_clip, output_file, *_args, **_kwargs):
+            Path(output_file).write_bytes(b"fake video")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_hash = "a" * 64
+            source_path = Path(temp_dir) / "task-1" / f"vid-{source_hash}.mp4"
+            repeated_source_path = (
+                Path(temp_dir) / "task-2" / f"vid-{source_hash}.mp4"
+            )
+            source_path.parent.mkdir()
+            repeated_source_path.parent.mkdir()
+            source_path.write_bytes(b"source video")
+            repeated_source_path.write_bytes(b"source video")
+            combined_video_path = os.path.join(temp_dir, "combined.mp4")
+
+            def _storage_dir(sub_dir="", create=False):
+                storage_path = Path(temp_dir) / "storage"
+                if sub_dir:
+                    storage_path = storage_path / sub_dir
+                if create:
+                    storage_path.mkdir(parents=True, exist_ok=True)
+                return str(storage_path)
+
+            with (
+                patch.object(vd.utils, "storage_dir", side_effect=_storage_dir),
+                patch.object(vd, "AudioFileClip", return_value=_FakeAudioClip()),
+                patch.object(
+                    vd,
+                    "_open_video_clip_quietly",
+                    side_effect=_open_fake_video_clip,
+                ),
+                patch.object(
+                    vd,
+                    "_write_videofile_with_codec_fallback",
+                    side_effect=_write_fake_clip,
+                ) as write_video,
+                patch.object(vd, "concat_video_clips_with_ffmpeg") as concat_mock,
+            ):
+                vd.combine_videos(
+                    combined_video_path=combined_video_path,
+                    video_paths=[str(source_path)],
+                    audio_file=os.path.join(temp_dir, "audio.mp3"),
+                    video_aspect=vd.VideoAspect.portrait,
+                    video_concat_mode=vd.VideoConcatMode.sequential,
+                    video_transition_mode=None,
+                    max_clip_duration=5,
+                )
+                vd.combine_videos(
+                    combined_video_path=combined_video_path,
+                    video_paths=[str(repeated_source_path)],
+                    audio_file=os.path.join(temp_dir, "audio.mp3"),
+                    video_aspect=vd.VideoAspect.portrait,
+                    video_concat_mode=vd.VideoConcatMode.sequential,
+                    video_transition_mode=None,
+                    max_clip_duration=5,
+                )
+
+        self.assertEqual(write_video.call_count, 1)
+        self.assertEqual(concat_mock.call_count, 2)
+
     def test_combine_videos_keeps_small_duration_safety_margin(self):
         """
         音频和素材累计时长刚好相等时，仍应继续追加一个短片段作为安全余量。
@@ -828,6 +1011,12 @@ class TestVideoService(unittest.TestCase):
             def subclipped(self, start_time, end_time):
                 return _FakeVideoClip(end_time - start_time)
 
+            def resized(self, new_size):
+                resized_clip = _FakeVideoClip(self.duration)
+                resized_clip.size = new_size
+                resized_clip.w, resized_clip.h = new_size
+                return resized_clip
+
         video_durations = {
             "clip-1.mp4": 3.0,
             "clip-2.mp4": 4.0,
@@ -838,27 +1027,45 @@ class TestVideoService(unittest.TestCase):
         def _open_fake_video_clip(video_path):
             return _FakeVideoClip(video_durations[video_path])
 
+        def _write_fake_clip(_clip, output_file, *_args, **_kwargs):
+            Path(output_file).write_bytes(b"fake video")
+
         with tempfile.TemporaryDirectory() as temp_dir:
             combined_video_path = os.path.join(temp_dir, "combined.mp4")
+
+            def _storage_dir(sub_dir="", create=False):
+                storage_path = Path(temp_dir) / "storage"
+                if sub_dir:
+                    storage_path = storage_path / sub_dir
+                if create:
+                    storage_path.mkdir(parents=True, exist_ok=True)
+                return str(storage_path)
 
             with patch.object(vd, "AudioFileClip", return_value=_FakeAudioClip()):
                 with patch.object(
                     vd, "_open_video_clip_quietly", side_effect=_open_fake_video_clip
                 ):
                     with patch.object(
-                        vd, "_write_videofile_with_codec_fallback"
+                        vd,
+                        "_write_videofile_with_codec_fallback",
+                        side_effect=_write_fake_clip,
                     ) as write_mock:
                         with patch.object(vd, "concat_video_clips_with_ffmpeg") as concat_mock:
                             with patch.object(vd, "delete_files"):
-                                result = vd.combine_videos(
-                                    combined_video_path=combined_video_path,
-                                    video_paths=list(video_durations.keys()),
-                                    audio_file=os.path.join(temp_dir, "audio.mp3"),
-                                    video_aspect=vd.VideoAspect.portrait,
-                                    video_concat_mode=vd.VideoConcatMode.sequential,
-                                    video_transition_mode=None,
-                                    max_clip_duration=10,
-                                )
+                                with patch.object(
+                                    vd.utils,
+                                    "storage_dir",
+                                    side_effect=_storage_dir,
+                                ):
+                                    result = vd.combine_videos(
+                                        combined_video_path=combined_video_path,
+                                        video_paths=list(video_durations.keys()),
+                                        audio_file=os.path.join(temp_dir, "audio.mp3"),
+                                        video_aspect=vd.VideoAspect.portrait,
+                                        video_concat_mode=vd.VideoConcatMode.sequential,
+                                        video_transition_mode=None,
+                                        max_clip_duration=10,
+                                    )
 
         self.assertEqual(result, combined_video_path)
         self.assertEqual(write_mock.call_count, 4)

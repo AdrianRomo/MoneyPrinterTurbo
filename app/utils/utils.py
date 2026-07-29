@@ -3,6 +3,7 @@ import math
 import os
 import re
 import shutil
+import time
 from functools import lru_cache
 from pathlib import Path
 import threading
@@ -23,6 +24,19 @@ def get_response(status: int, data: Any = None, message: str = ""):
     if message:
         obj["message"] = message
     return obj
+
+
+def log_runtime_benchmark(stage: str, started_at: float, **fields) -> float:
+    """Log a compact elapsed-time line for generation pipeline stages."""
+    duration = time.perf_counter() - started_at
+    details = ", ".join(
+        f"{key}={value}" for key, value in fields.items() if value is not None
+    )
+    suffix = f", {details}" if details else ""
+    logger.info(
+        f"runtime benchmark: stage={stage}, duration={duration:.3f}s{suffix}"
+    )
+    return duration
 
 
 def to_json(obj):

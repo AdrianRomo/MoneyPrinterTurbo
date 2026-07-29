@@ -2,6 +2,8 @@ import os
 import random
 import re
 import threading
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Callable, List
 from urllib.parse import quote_plus, urlencode, urlsplit, urlunsplit
@@ -19,6 +21,9 @@ from app.utils import utils
 # Thread-safe counter for API key rotation
 _api_key_counter = 0
 _api_key_lock = threading.Lock()
+_MIN_VIDEO_RENDITION_DIMENSION = 480
+_DEFAULT_MATERIAL_DOWNLOAD_CONCURRENCY = 2
+_MAX_MATERIAL_DOWNLOAD_CONCURRENCY = 4
 
 
 def _safe_public_url(value: Any) -> str | None:
@@ -156,6 +161,103 @@ def _get_tls_verify() -> bool:
     return bool(tls_verify)
 
 
+def _video_rendition_dimensions(
+    video: dict,
+    target_width: int,
+    target_height: int,
+) -> tuple[int, int] | None:
+    try:
+        width = int(video.get("width") or 0)
+        height = int(video.get("height") or 0)
+    except (TypeError, ValueError):
+        return None
+    if width > 0 and height <= 0:
+        height = int(round(width * (target_height / target_width)))
+    elif height > 0 and width <= 0:
+        width = int(round(height * (target_width / target_height)))
+    if width < _MIN_VIDEO_RENDITION_DIMENSION or height < _MIN_VIDEO_RENDITION_DIMENSION:
+        return None
+    return width, height
+
+
+def _video_rendition_score(
+    width: int,
+    height: int,
+    target_width: int,
+    target_height: int,
+) -> tuple:
+    target_ratio = target_width / target_height
+    rendition_ratio = width / height
+    orientation_penalty = int((width >= height) != (target_width >= target_height))
+    ratio_penalty = abs(rendition_ratio - target_ratio) / target_ratio
+    meets_target = width >= target_width and height >= target_height
+    target_area = target_width * target_height
+    rendition_area = width * height
+
+    if meets_target:
+        # Prefer the smallest target-or-better rendition: same visual quality for
+        # the final 1080p output, lower download time and less disk churn.
+        return (orientation_penalty, ratio_penalty, 0, rendition_area - target_area)
+
+    shortfall = max(0.0, (target_width - width) / target_width) + max(
+        0.0, (target_height - height) / target_height
+    )
+    # If every rendition is below target, use the least-bad one.
+    return (orientation_penalty, ratio_penalty, 1, shortfall, -rendition_area)
+
+
+def _select_best_video_rendition(
+    video_files,
+    target_width: int,
+    target_height: int,
+    url_field: str,
+) -> tuple[dict, str, int, int] | None:
+    if isinstance(video_files, dict):
+        iterable = video_files.items()
+    else:
+        iterable = enumerate(video_files or [])
+
+    candidates = []
+    for fallback_id, video in iterable:
+        if not isinstance(video, dict):
+            continue
+        video_url = video.get(url_field)
+        dimensions = _video_rendition_dimensions(video, target_width, target_height)
+        if not video_url or dimensions is None:
+            continue
+        width, height = dimensions
+        rendition_id = video.get("id")
+        if rendition_id in (None, ""):
+            rendition_id = fallback_id
+        candidates.append(
+            (
+                _video_rendition_score(width, height, target_width, target_height),
+                video,
+                str(rendition_id),
+                width,
+                height,
+            )
+        )
+
+    if not candidates:
+        return None
+    _, video, rendition_id, width, height = min(candidates, key=lambda candidate: candidate[0])
+    return video, rendition_id, width, height
+
+
+def _get_material_download_concurrency() -> int:
+    try:
+        configured = int(
+            config.app.get(
+                "material_download_concurrency",
+                _DEFAULT_MATERIAL_DOWNLOAD_CONCURRENCY,
+            )
+        )
+    except (TypeError, ValueError):
+        configured = _DEFAULT_MATERIAL_DOWNLOAD_CONCURRENCY
+    return max(1, min(_MAX_MATERIAL_DOWNLOAD_CONCURRENCY, configured))
+
+
 def get_api_key(cfg_key: str):
     api_keys = config.app.get(cfg_key)
     if not api_keys:
@@ -266,36 +368,34 @@ def search_videos_pexels(
             # check if video has desired minimum duration
             if duration < minimum_duration:
                 continue
-            video_files = v["video_files"]
-            # loop through each url to determine the best quality
-            for video in video_files:
-                w = int(video["width"])
-                h = int(video["height"])
-                if w == video_width and h == video_height:
-                    item = MaterialInfo()
-                    item.provider = "pexels"
-                    item.url = video["link"]
-                    item.duration = duration
-                    item.source_info = {
-                        "provider": "pexels",
-                        "search_term": search_term,
-                        "asset_id": (
-                            str(v.get("id")) if v.get("id") is not None else None
-                        ),
-                        "source_page": _safe_public_url(v.get("url")),
-                        "creator": _creator_info(v.get("user")),
-                        "rendition": {
-                            "id": (
-                                str(video.get("id"))
-                                if video.get("id") is not None
-                                else None
-                            ),
-                            "width": w,
-                            "height": h,
-                        },
-                    }
-                    video_items.append(item)
-                    break
+            selected = _select_best_video_rendition(
+                v.get("video_files"),
+                target_width=video_width,
+                target_height=video_height,
+                url_field="link",
+            )
+            if selected is None:
+                continue
+            video, rendition_id, w, h = selected
+            item = MaterialInfo()
+            item.provider = "pexels"
+            item.url = video["link"]
+            item.duration = duration
+            item.source_info = {
+                "provider": "pexels",
+                "search_term": search_term,
+                "asset_id": (
+                    str(v.get("id")) if v.get("id") is not None else None
+                ),
+                "source_page": _safe_public_url(v.get("url")),
+                "creator": _creator_info(v.get("user")),
+                "rendition": {
+                    "id": rendition_id,
+                    "width": w,
+                    "height": h,
+                },
+            }
+            video_items.append(item)
         return video_items
     except Exception as e:
         logger.error(
@@ -381,38 +481,39 @@ def search_videos_pixabay(
             # check if video has desired minimum duration
             if duration < minimum_duration:
                 continue
-            video_files = v["videos"]
-            # loop through each url to determine the best quality
-            for video_type in video_files:
-                video = video_files[video_type]
-                w = int(video["width"])
-                # h = int(video["height"])
-                if w >= video_width:
-                    item = MaterialInfo()
-                    item.provider = "pixabay"
-                    item.url = video["url"]
-                    item.duration = duration
-                    item.source_info = {
-                        "provider": "pixabay",
-                        "search_term": search_term,
-                        "asset_id": (
-                            str(v.get("id")) if v.get("id") is not None else None
-                        ),
-                        "source_page": _safe_public_url(v.get("pageURL")),
-                        "creator": _creator_info(
-                            {
-                                "id": v.get("user_id"),
-                                "name": v.get("user"),
-                            }
-                        ),
-                        "rendition": {
-                            "id": video_type,
-                            "width": w,
-                            "height": video.get("height"),
-                        },
+            selected = _select_best_video_rendition(
+                v.get("videos"),
+                target_width=video_width,
+                target_height=video_height,
+                url_field="url",
+            )
+            if selected is None:
+                continue
+            video, rendition_id, w, h = selected
+            item = MaterialInfo()
+            item.provider = "pixabay"
+            item.url = video["url"]
+            item.duration = duration
+            item.source_info = {
+                "provider": "pixabay",
+                "search_term": search_term,
+                "asset_id": (
+                    str(v.get("id")) if v.get("id") is not None else None
+                ),
+                "source_page": _safe_public_url(v.get("pageURL")),
+                "creator": _creator_info(
+                    {
+                        "id": v.get("user_id"),
+                        "name": v.get("user"),
                     }
-                    video_items.append(item)
-                    break
+                ),
+                "rendition": {
+                    "id": rendition_id,
+                    "width": w,
+                    "height": h,
+                },
+            }
+            video_items.append(item)
         return video_items
     except Exception as e:
         error_message = _redact_request_error(e, api_key)
@@ -515,6 +616,38 @@ def search_videos_coverr(
     return []
 
 
+def _validate_video_file(video_path: str) -> bool:
+    if not os.path.exists(video_path) or os.path.getsize(video_path) <= 0:
+        return False
+
+    clip = None
+    try:
+        clip = VideoFileClip(video_path)
+        return bool(clip.duration > 0 and clip.fps > 0)
+    except Exception as e:
+        logger.warning(f"invalid video file: {video_path} => {str(e)}")
+        return False
+    finally:
+        if clip is not None:
+            try:
+                clip.close()
+            except Exception as close_error:
+                logger.warning(
+                    f"failed to close video clip: {video_path}, error: {str(close_error)}"
+                )
+
+
+def _remove_file_safely(file_path: str) -> None:
+    try:
+        os.remove(file_path)
+    except FileNotFoundError:
+        return
+    except Exception as remove_error:
+        logger.warning(
+            f"failed to remove file: {file_path}, error: {str(remove_error)}"
+        )
+
+
 def save_video(video_url: str, save_dir: str = "") -> str:
     if not save_dir:
         save_dir = utils.storage_dir("cache_videos")
@@ -527,51 +660,51 @@ def save_video(video_url: str, save_dir: str = "") -> str:
     video_id = f"vid-{url_hash}"
     video_path = f"{save_dir}/{video_id}.mp4"
 
-    # if video already exists, return the path
     if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
-        logger.info(f"video already exists: {video_path}")
-        return video_path
+        if _validate_video_file(video_path):
+            logger.info(f"video already exists: {video_path}")
+            return video_path
+        _remove_file_safely(video_path)
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
     }
 
-    # if video does not exist, download it
-    with open(video_path, "wb") as f:
-        f.write(
-            requests.get(
-                video_url,
-                headers=headers,
-                proxies=config.proxy,
-                verify=_get_tls_verify(),
-                timeout=(60, 240),
-            ).content
+    partial_video_path = f"{video_path}.part"
+    _remove_file_safely(partial_video_path)
+    response = None
+    try:
+        response = requests.get(
+            video_url,
+            headers=headers,
+            proxies=config.proxy,
+            verify=_get_tls_verify(),
+            timeout=(60, 240),
+            stream=True,
         )
+        if hasattr(response, "raise_for_status"):
+            response.raise_for_status()
 
-    if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
-        clip = None
-        try:
-            clip = VideoFileClip(video_path)
-            duration = clip.duration
-            fps = clip.fps
-            if duration > 0 and fps > 0:
-                return video_path
-        except Exception as e:
-            logger.warning(f"invalid video file: {video_path} => {str(e)}")
-            try:
-                os.remove(video_path)
-            except Exception as remove_error:
-                logger.warning(
-                    f"failed to remove invalid video file: {video_path}, error: {str(remove_error)}"
-                )
-        finally:
-            if clip is not None:
-                try:
-                    clip.close()
-                except Exception as close_error:
-                    logger.warning(
-                        f"failed to close video clip: {video_path}, error: {str(close_error)}"
-                    )
+        with open(partial_video_path, "wb") as f:
+            if hasattr(response, "iter_content"):
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+            else:
+                f.write(response.content)
+
+        os.replace(partial_video_path, video_path)
+    except Exception:
+        _remove_file_safely(partial_video_path)
+        _remove_file_safely(video_path)
+        raise
+    finally:
+        if response is not None and hasattr(response, "close"):
+            response.close()
+
+    if _validate_video_file(video_path):
+        return video_path
+    _remove_file_safely(video_path)
     return ""
 
 
@@ -646,6 +779,163 @@ def _search_videos_with_cache(
         return items
 
 
+def _download_material_item(
+    item: MaterialInfo,
+    material_directory: str,
+    max_clip_duration: int,
+    *,
+    ordered_search_term: str | None = None,
+) -> tuple[str, dict[str, Any] | None, float] | None:
+    source_info = item.source_info if isinstance(item.source_info, dict) else {}
+    ordered_label = (
+        f" for {ordered_search_term!r}" if ordered_search_term is not None else ""
+    )
+    logger.info(
+        f"downloading{ordered_label} {item.provider} video: "
+        f"asset_id={source_info.get('asset_id') or 'unknown'}"
+    )
+    saved_video_path = save_video(video_url=item.url, save_dir=material_directory)
+    if not saved_video_path:
+        return None
+
+    logger.info(f"video saved: {saved_video_path}")
+    material_source = None
+    try:
+        material_source = _material_source_record(item, saved_video_path)
+    except Exception as source_error:
+        # 来源记录异常不能把已经成功下载的素材视为下载失败，更不能
+        # 阻断视频生成；保留供应商和异常类型用于后续定位。
+        logger.warning(
+            "failed to prepare material source record: "
+            f"provider={item.provider}, "
+            f"error={type(source_error).__name__}, detail={source_error}"
+        )
+    return saved_video_path, material_source, min(max_clip_duration, item.duration)
+
+
+def _append_download_result(
+    result: tuple[str, dict[str, Any] | None, float] | None,
+    video_paths: list[str],
+    material_sources: list[dict[str, Any]],
+) -> float:
+    if not result:
+        return 0.0
+    saved_video_path, material_source, seconds = result
+    video_paths.append(saved_video_path)
+    if material_source:
+        material_sources.append(material_source)
+    return float(seconds)
+
+
+def _download_video_items_serial(
+    items: List[MaterialInfo],
+    material_directory: str,
+    audio_duration: float,
+    max_clip_duration: int,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    video_paths: list[str] = []
+    material_sources: list[dict[str, Any]] = []
+    total_duration = 0.0
+    for item in items:
+        try:
+            result = _download_material_item(
+                item=item,
+                material_directory=material_directory,
+                max_clip_duration=max_clip_duration,
+            )
+            total_duration += _append_download_result(
+                result, video_paths, material_sources
+            )
+            if result and total_duration > audio_duration:
+                logger.info(
+                    f"total duration of downloaded videos: {total_duration} seconds, skip downloading more"
+                )
+                break
+        except Exception as e:
+            logger.error(
+                "failed to download material video: "
+                f"provider={item.provider}, error={type(e).__name__}, "
+                f"detail={_redact_request_error(e, item.url)}"
+            )
+    return video_paths, material_sources
+
+
+def _download_video_items_parallel(
+    items: List[MaterialInfo],
+    material_directory: str,
+    audio_duration: float,
+    max_clip_duration: int,
+    concurrency: int,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    video_paths: list[str] = []
+    material_sources: list[dict[str, Any]] = []
+    total_duration = 0.0
+    next_index = 0
+    futures = {}
+
+    def submit_next(executor: ThreadPoolExecutor) -> None:
+        nonlocal next_index
+        if next_index >= len(items):
+            return
+        item = items[next_index]
+        future = executor.submit(
+            _download_material_item,
+            item,
+            material_directory,
+            max_clip_duration,
+        )
+        futures[future] = item
+        next_index += 1
+
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        while next_index < len(items) and len(futures) < concurrency:
+            submit_next(executor)
+
+        while futures:
+            done, _pending = wait(futures, return_when=FIRST_COMPLETED)
+            for future in done:
+                item = futures.pop(future)
+                try:
+                    result = future.result()
+                    total_duration += _append_download_result(
+                        result, video_paths, material_sources
+                    )
+                except Exception as e:
+                    logger.error(
+                        "failed to download material video: "
+                        f"provider={item.provider}, error={type(e).__name__}, "
+                        f"detail={_redact_request_error(e, item.url)}"
+                    )
+
+            if total_duration > audio_duration:
+                logger.info(
+                    f"total duration of downloaded videos: {total_duration} seconds, skip downloading more"
+                )
+                # Let already-started downloads finish and include them; avoid
+                # launching more work after the target duration is covered.
+                while futures:
+                    done, _pending = wait(futures, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        item = futures.pop(future)
+                        try:
+                            result = future.result()
+                            _append_download_result(
+                                result, video_paths, material_sources
+                            )
+                        except Exception as e:
+                            logger.error(
+                                "failed to download material video: "
+                                f"provider={item.provider}, error={type(e).__name__}, "
+                                f"detail={_redact_request_error(e, item.url)}"
+                            )
+                break
+
+            while next_index < len(items) and len(futures) < concurrency:
+                submit_next(executor)
+
+    return video_paths, material_sources
+
+
 def download_videos(
     task_id: str,
     search_terms: List[str],
@@ -689,12 +979,14 @@ def download_videos(
             task_id=task_id,
             search_terms=search_terms,
             search_videos=search_videos,
+            provider=provider,
             video_aspect=video_aspect,
             audio_duration=audio_duration,
             max_clip_duration=max_clip_duration,
             material_directory=material_directory,
         )
 
+    search_started_at = time.perf_counter()
     valid_video_items = []
     valid_video_urls = []
     found_duration = 0.0
@@ -715,52 +1007,50 @@ def download_videos(
     logger.info(
         f"found total videos: {len(valid_video_items)}, required duration: {audio_duration} seconds, found duration: {found_duration} seconds"
     )
-    video_paths = []
-    material_sources: list[dict[str, Any]] = []
-
+    utils.log_runtime_benchmark(
+        "material_search",
+        search_started_at,
+        source=provider,
+        terms=len(search_terms),
+        candidates=len(valid_video_items),
+    )
     concat_mode_value = getattr(video_concat_mode, "value", video_concat_mode)
     if concat_mode_value == VideoConcatMode.random.value:
         random.shuffle(valid_video_items)
 
-    total_duration = 0.0
-    for item in valid_video_items:
-        try:
-            source_info = item.source_info if isinstance(item.source_info, dict) else {}
-            logger.info(
-                f"downloading {item.provider} video: "
-                f"asset_id={source_info.get('asset_id') or 'unknown'}"
-            )
-            saved_video_path = save_video(
-                video_url=item.url, save_dir=material_directory
-            )
-            if saved_video_path:
-                logger.info(f"video saved: {saved_video_path}")
-                video_paths.append(saved_video_path)
-                try:
-                    material_sources.append(
-                        _material_source_record(item, saved_video_path)
-                    )
-                except Exception as source_error:
-                    # 来源记录异常不能把已经成功下载的素材视为下载失败，更不能
-                    # 阻断视频生成；保留供应商和异常类型用于后续定位。
-                    logger.warning(
-                        "failed to prepare material source record: "
-                        f"provider={item.provider}, "
-                        f"error={type(source_error).__name__}, detail={source_error}"
-                    )
-                seconds = min(max_clip_duration, item.duration)
-                total_duration += seconds
-                if total_duration > audio_duration:
-                    logger.info(
-                        f"total duration of downloaded videos: {total_duration} seconds, skip downloading more"
-                    )
-                    break
-        except Exception as e:
-            logger.error(
-                "failed to download material video: "
-                f"provider={item.provider}, error={type(e).__name__}, "
-                f"detail={_redact_request_error(e, item.url)}"
-            )
+    download_concurrency = _get_material_download_concurrency()
+    download_started_at = time.perf_counter()
+    effective_download_concurrency = 1
+    if (
+        concat_mode_value == VideoConcatMode.random.value
+        and audio_duration > 0
+        and download_concurrency > 1
+    ):
+        effective_download_concurrency = download_concurrency
+        logger.info(
+            f"downloading random materials with concurrency={download_concurrency}"
+        )
+        video_paths, material_sources = _download_video_items_parallel(
+            items=valid_video_items,
+            material_directory=material_directory,
+            audio_duration=audio_duration,
+            max_clip_duration=max_clip_duration,
+            concurrency=download_concurrency,
+        )
+    else:
+        video_paths, material_sources = _download_video_items_serial(
+            items=valid_video_items,
+            material_directory=material_directory,
+            audio_duration=audio_duration,
+            max_clip_duration=max_clip_duration,
+        )
+    utils.log_runtime_benchmark(
+        "material_download",
+        download_started_at,
+        source=provider,
+        downloaded=len(video_paths),
+        concurrency=effective_download_concurrency,
+    )
     logger.success(f"downloaded {len(video_paths)} videos")
     _persist_material_sources(task_id, material_sources)
     return video_paths
@@ -770,6 +1060,7 @@ def _download_videos_by_script_order(
     task_id: str,
     search_terms: List[str],
     search_videos,
+    provider: str,
     video_aspect: VideoAspect,
     audio_duration: float,
     max_clip_duration: int,
@@ -785,6 +1076,7 @@ def _download_videos_by_script_order(
     这样在不重写视频合成引擎的前提下，尽量保证素材顺序贴近文案顺序。
     """
     logger.info("downloading videos with script-order material matching")
+    search_started_at = time.perf_counter()
     candidate_groups = []
     valid_video_urls = set()
     found_duration = 0.0
@@ -812,7 +1104,16 @@ def _download_videos_by_script_order(
         f"found total ordered video candidates: {sum(len(items) for _, items in candidate_groups)}, "
         f"required duration: {audio_duration} seconds, found duration: {found_duration} seconds"
     )
+    utils.log_runtime_benchmark(
+        "material_search",
+        search_started_at,
+        source=provider,
+        terms=len(search_terms),
+        candidates=sum(len(items) for _, items in candidate_groups),
+        ordered=True,
+    )
 
+    download_started_at = time.perf_counter()
     video_paths = []
     material_sources: list[dict[str, Any]] = []
     total_duration = 0.0
@@ -868,6 +1169,14 @@ def _download_videos_by_script_order(
         candidate_index += 1
 
     logger.success(f"downloaded {len(video_paths)} ordered videos")
+    utils.log_runtime_benchmark(
+        "material_download",
+        download_started_at,
+        source=provider,
+        downloaded=len(video_paths),
+        concurrency=1,
+        ordered=True,
+    )
     _persist_material_sources(task_id, material_sources)
     return video_paths
 

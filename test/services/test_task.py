@@ -1,8 +1,10 @@
-import unittest
 import os
 import shutil
 import sys
 import tempfile
+import threading
+import time
+import unittest
 from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
@@ -135,6 +137,59 @@ class TestTaskService(unittest.TestCase):
             )
 
         self.assertEqual(combine_videos.call_args.kwargs["clip_speed"], 1.25)
+
+    def test_generate_final_videos_parallelizes_multiple_outputs_with_bound(self):
+        """多条最终视频应按配置并行生成，同时不超过小型工作池上限。"""
+        params = VideoParams(video_subject="test", video_count=3)
+        active_workers = 0
+        max_active_workers = 0
+        combine_calls = 0
+        lock = threading.Lock()
+        two_workers_active = threading.Event()
+
+        def fake_combine_videos(**_kwargs):
+            nonlocal active_workers, max_active_workers, combine_calls
+            with lock:
+                active_workers += 1
+                combine_calls += 1
+                max_active_workers = max(max_active_workers, active_workers)
+                if active_workers == 2:
+                    two_workers_active.set()
+            two_workers_active.wait(timeout=1)
+            time.sleep(0.02)
+            with lock:
+                active_workers -= 1
+
+        with (
+            patch.dict(tm.config.app, {"video_output_parallelism": 2}),
+            patch.object(
+                tm.video,
+                "combine_videos",
+                side_effect=fake_combine_videos,
+            ),
+            patch.object(tm.video, "generate_video", return_value=True),
+            patch.object(tm.sm.state, "update_task"),
+        ):
+            final_paths, combined_paths, warnings = tm.generate_final_videos(
+                task_id="parallel-outputs",
+                params=params,
+                downloaded_videos=["material.mp4"],
+                audio_file="audio.mp3",
+                subtitle_path="",
+                audio_duration=5,
+            )
+
+        self.assertEqual(combine_calls, 3)
+        self.assertEqual(max_active_workers, 2)
+        self.assertEqual(
+            [Path(item).name for item in final_paths],
+            ["final-1.mp4", "final-2.mp4", "final-3.mp4"],
+        )
+        self.assertEqual(
+            [Path(item).name for item in combined_paths],
+            ["combined-1.mp4", "combined-2.mp4", "combined-3.mp4"],
+        )
+        self.assertEqual(warnings, [])
 
     def test_generate_final_videos_uses_generated_sonilo_music(self):
         """Sonilo 必须针对每条拼接后的视频生成配乐，并传给最终混音。"""

@@ -225,6 +225,23 @@ subtitle_provider = "edge"
 # "h264_mf", "h264_videotoolbox".
 # video_codec = "libx264"
 
+# Local encode quality profile. "balanced" improves default x264 quality without
+# the file-size cost of the high profile. Use "draft" for previews and "high"
+# when upload quality matters more than local encode time/disk use.
+# Available values: "draft", "balanced", "high".
+# video_quality = "balanced"
+# Optional advanced overrides. video_crf only applies to libx264; lower is
+# higher quality/larger files. video_bitrate is mainly useful for hardware
+# encoders whose CRF/CQ flags differ by vendor.
+# video_crf = 20
+# video_encode_preset = "medium"
+# video_bitrate = "8000k"
+
+# How mismatched source aspect ratios are fit into the final frame.
+# "letterbox" preserves the full source with black bars. "crop" fills the frame
+# and avoids bars, but may crop edges.
+# video_fill_mode = "letterbox"
+
 # -----------------------------------------------------------------------------
 # Storage and Task Runtime / 存储与任务运行
 # -----------------------------------------------------------------------------
@@ -237,6 +254,15 @@ endpoint = ""
 # each task directory, and an absolute path stores materials in that directory.
 # Example: material_directory = "/path/to/videos"
 material_directory = ""
+
+# Random online material downloads can run concurrently. Keep this small to
+# avoid unnecessary bandwidth pressure or provider throttling; ordered/script
+# matching mode remains serial to preserve timeline intent.
+material_download_concurrency = 2
+
+# Number of final outputs rendered in parallel when video_count > 1. Keep this
+# small because each output can run FFmpeg with n_threads.
+video_output_parallelism = 2
 
 # Optional Redis-backed task state. Keep Redis private to this application;
 # untrusted writers must not be able to modify serialized task records.
