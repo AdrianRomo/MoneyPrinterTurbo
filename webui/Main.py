@@ -10,7 +10,7 @@ import subprocess
 import sys
 import webbrowser
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -41,6 +41,7 @@ from app.models.schema import (
     VideoParams,
     VideoTransitionMode,
 )
+from app.services import article_pipeline, article_ui
 from app.services import bgm as bgm_service
 from app.services import cache_manager, llm, video, voice, webui_task
 from app.services import elevenlabs_music as elevenlabs_music_service
@@ -3904,6 +3905,445 @@ def _render_generation_controls(
 
     _render_current_generation_task()
     return start_button
+
+
+def _article_subscription_options(repo):
+    subscriptions = repo.list_subscriptions()
+    options = [""] + [sub.id for sub in subscriptions]
+    labels = {"": "All subscriptions"}
+    labels.update({sub.id: sub.name for sub in subscriptions})
+    return subscriptions, options, labels
+
+
+def _render_article_subscription_form(repo, existing=None, key_prefix="new"):
+    defaults = existing or article_ui.build_subscription(name="New subscription")
+    with st.form(f"article_subscription_form_{key_prefix}"):
+        enabled = st.checkbox("Enabled", value=bool(defaults.enabled), key=f"article_sub_enabled_{key_prefix}")
+        name = st.text_input("Name", value="" if existing is None else defaults.name, key=f"article_sub_name_{key_prefix}")
+        query = st.text_input("Topic query", value=defaults.query, key=f"article_sub_query_{key_prefix}")
+        language = st.text_input("Language", value=defaults.language, key=f"article_sub_language_{key_prefix}")
+        rss_urls = st.text_area(
+            "RSS feeds",
+            value="\n".join(defaults.rss_urls),
+            key=f"article_sub_rss_{key_prefix}",
+            height=90,
+        )
+        trusted_domains = st.text_area(
+            "Trusted domains",
+            value="\n".join(defaults.trusted_domains),
+            key=f"article_sub_trusted_{key_prefix}",
+            height=70,
+        )
+        blocked_domains = st.text_area(
+            "Blocked domains",
+            value="\n".join(defaults.blocked_domains),
+            key=f"article_sub_blocked_{key_prefix}",
+            height=70,
+        )
+        col_a, col_b, col_c = st.columns(3)
+        freshness_hours = col_a.number_input(
+            "Freshness hours",
+            min_value=1,
+            max_value=8760,
+            value=int(defaults.freshness_hours),
+            key=f"article_sub_fresh_{key_prefix}",
+        )
+        poll_interval_minutes = col_b.number_input(
+            "Polling interval minutes",
+            min_value=5,
+            max_value=10080,
+            value=int(defaults.poll_interval_minutes),
+            key=f"article_sub_interval_{key_prefix}",
+        )
+        minimum_sources = col_c.number_input(
+            "Minimum sources",
+            min_value=1,
+            max_value=10,
+            value=int(defaults.minimum_independent_sources),
+            key=f"article_sub_sources_{key_prefix}",
+        )
+        automation_mode = st.selectbox(
+            "Automation mode override",
+            options=["", "assisted", "automated", "autonomous"],
+            index=["", "assisted", "automated", "autonomous"].index(defaults.automation_mode or ""),
+            key=f"article_sub_mode_{key_prefix}",
+        )
+        submitted = st.form_submit_button("Save subscription", type="primary")
+    if not submitted:
+        return
+    try:
+        subscription = article_ui.build_subscription(
+            existing=existing,
+            name=name,
+            query=query,
+            language=language,
+            rss_urls=article_ui.lines_from_text(rss_urls),
+            trusted_domains=article_ui.lines_from_text(trusted_domains),
+            blocked_domains=article_ui.lines_from_text(blocked_domains),
+            freshness_hours=int(freshness_hours),
+            poll_interval_minutes=int(poll_interval_minutes),
+            minimum_independent_sources=int(minimum_sources),
+            automation_mode=automation_mode,
+            enabled=enabled,
+        )
+        article_ui.save_subscription(repo, subscription)
+    except Exception as exc:
+        st.error(f"Subscription save failed: {exc}")
+    else:
+        st.success("Subscription saved")
+        st.rerun()
+
+
+def _render_article_subscriptions(repo):
+    st.subheader("Subscriptions")
+    with st.expander("Create subscription", expanded=False):
+        _render_article_subscription_form(repo, key_prefix="new")
+
+    rows = article_ui.subscription_rows(repo)
+    if not rows:
+        st.info("No subscriptions yet.")
+        return
+
+    for row in rows:
+        sub = row["subscription"]
+        summary = row["summary"]
+        with st.container(border=True):
+            cols = st.columns([2.2, 1.1, 1.4, 1.2, 1.2], vertical_alignment="center")
+            cols[0].write(sub.name)
+            cols[1].write("Enabled" if sub.enabled else "Disabled")
+            cols[2].write(f"{len(sub.rss_urls)} feeds")
+            cols[3].write(summary["last_poll_time"])
+            cols[4].write(summary["last_poll_result"])
+            if summary["errors"]:
+                with st.expander("Feed errors", expanded=False):
+                    for error in summary["errors"]:
+                        st.error(error)
+            action_cols = st.columns(3)
+            with action_cols[0].form(f"article_poll_now_{sub.id}"):
+                if st.form_submit_button("Poll now", use_container_width=True):
+                    try:
+                        with st.spinner("Polling feeds"):
+                            run, article_count, cluster_count = article_ui.poll_now(repo, sub.id)
+                        st.success(
+                            f"Poll complete: {article_count} articles, {cluster_count} clusters, {len(run.errors)} errors"
+                        )
+                    except Exception as exc:
+                        st.error(f"Poll failed: {exc}")
+            with action_cols[1].form(f"article_toggle_{sub.id}"):
+                label = "Disable" if sub.enabled else "Enable"
+                if st.form_submit_button(label, use_container_width=True):
+                    sub.enabled = not sub.enabled
+                    repo.upsert_subscription(sub)
+                    st.rerun()
+            with action_cols[2].form(f"article_delete_{sub.id}"):
+                confirmed = st.checkbox("Confirm delete", key=f"article_delete_confirm_{sub.id}")
+                if st.form_submit_button("Delete", disabled=not confirmed, use_container_width=True):
+                    repo.delete_subscription(sub.id)
+                    st.rerun()
+            with st.expander("Edit subscription", expanded=False):
+                _render_article_subscription_form(repo, existing=sub, key_prefix=sub.id)
+
+
+def _render_article_candidate_row(repo, row):
+    article = row["article"]
+    published = article.published_at.strftime("%Y-%m-%d") if article.published_at else "-"
+    with st.container(border=True):
+        cols = st.columns([2.5, 1.2, 0.9, 0.9, 0.9, 0.9, 1.0], vertical_alignment="center")
+        cols[0].write(article.title or article.canonical_url or article.id)
+        cols[1].write(article.publisher or article.domain or "-")
+        cols[2].write(published)
+        cols[3].write(row["source_count"])
+        cols[4].write(f"{row['story_score']:.2f}")
+        cols[5].write(f"{row['confidence']:.2f}")
+        cols[6].write(row["generation_status"])
+        metric_cols = st.columns(3)
+        metric_cols[0].metric("Visual", f"{row['visual_score']:.2f}")
+        metric_cols[1].metric("Risk", row["risk"])
+        metric_cols[2].metric("Source", article.domain or "-")
+        if row["uncertainties"]:
+            st.warning("Known uncertainties: " + "; ".join(row["uncertainties"]))
+        with st.expander("Sources", expanded=False):
+            if article.cluster_id:
+                sources = repo.list_articles(cluster_id=article.cluster_id)
+            else:
+                sources = [article]
+            for source in sources:
+                st.write(f"{source.publisher or source.domain}: {source.title}")
+                st.caption(source.canonical_url)
+        action_cols = st.columns(3)
+        with action_cols[0].form(f"article_reassess_{article.id}"):
+            if st.form_submit_button("Reassess", use_container_width=True):
+                try:
+                    with st.spinner("Assessing story"):
+                        article_ui.assess_article(repo, article.id)
+                    st.success("Assessment updated")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Assessment failed: {exc}")
+        with action_cols[1].form(f"article_generate_{article.id}"):
+            media_mode = st.selectbox(
+                "Media",
+                ["images_only", "videos_only", "mixed"],
+                key=f"article_generate_media_{article.id}",
+            )
+            if st.form_submit_button("Generate script", use_container_width=True):
+                try:
+                    with st.spinner("Generating reviewed script"):
+                        script = article_ui.generate_script(repo, article.id, media_mode=media_mode)
+                    st.session_state["article_mode_script"] = script.model_dump(mode="json")
+                    st.session_state["article_mode_article_id"] = article.id
+                    st.success("Script ready")
+                except Exception as exc:
+                    st.error(f"Generation failed: {exc}")
+        with action_cols[2].form(f"article_retry_{article.id}"):
+            disabled = article.status.value != "failed"
+            if st.form_submit_button("Retry failed", disabled=disabled, use_container_width=True):
+                try:
+                    with st.spinner("Retrying generation"):
+                        script = article_ui.generate_script(repo, article.id)
+                    st.session_state["article_mode_script"] = script.model_dump(mode="json")
+                    st.session_state["article_mode_article_id"] = article.id
+                    st.success("Retry script ready")
+                except Exception as exc:
+                    st.error(f"Retry failed: {exc}")
+
+
+def _render_article_candidates(repo):
+    st.subheader("Candidates")
+    subscriptions, sub_options, sub_labels = _article_subscription_options(repo)
+    with st.form("article_direct_url_form"):
+        direct_cols = st.columns([3, 1.3])
+        article_url = direct_cols[0].text_input("Article URL", key="article_direct_url")
+        direct_subscription = direct_cols[1].selectbox(
+            "Subscription",
+            options=sub_options,
+            format_func=lambda value: sub_labels.get(value, value),
+            key="article_direct_subscription",
+        )
+        if st.form_submit_button("Ingest URL", type="primary"):
+            try:
+                with st.spinner("Extracting article"):
+                    article, duplicate = article_ui.ingest_direct_url(
+                        repo, article_url, direct_subscription
+                    )
+                st.success(
+                    f"{'Existing' if duplicate else 'New'} article: {article.title or article.id}"
+                )
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Article ingestion failed: {exc}")
+
+    filter_cols = st.columns([1.4, 1.0, 1.0, 1.0, 1.0])
+    subscription_filter = filter_cols[0].selectbox(
+        "Subscription filter",
+        options=sub_options,
+        format_func=lambda value: sub_labels.get(value, value),
+        key="article_filter_subscription",
+    )
+    status_filter = filter_cols[1].selectbox(
+        "Status",
+        options=["", "discovered", "extracted", "clustered", "scored", "generated", "rendered", "skipped", "failed"],
+        key="article_filter_status",
+    )
+    source_filter = filter_cols[2].text_input("Source domain", key="article_filter_source")
+    minimum_score = filter_cols[3].slider("Minimum score", 0.0, 1.0, 0.0, 0.05, key="article_filter_score")
+    page_size = filter_cols[4].selectbox("Page size", [10, 25, 50], key="article_page_size")
+    date_cols = st.columns(2)
+    date_from = date_cols[0].date_input("From date", value=None, key="article_filter_from")
+    date_to = date_cols[1].date_input("To date", value=None, key="article_filter_to")
+    if isinstance(date_from, tuple):
+        date_from = None
+    if isinstance(date_to, tuple):
+        date_to = None
+    rows = article_ui.article_rows(
+        repo,
+        subscription_id=subscription_filter,
+        status=status_filter,
+        source=source_filter.strip(),
+        date_from=date_from if isinstance(date_from, date) else None,
+        date_to=date_to if isinstance(date_to, date) else None,
+        minimum_score=minimum_score,
+        limit=500,
+    )
+    if not rows:
+        st.info("No article candidates match the current filters.")
+        return
+    page_count = max(1, math.ceil(len(rows) / int(page_size)))
+    page = st.number_input("Page", min_value=1, max_value=page_count, value=1, key="article_page")
+    start = (int(page) - 1) * int(page_size)
+    for row in rows[start : start + int(page_size)]:
+        _render_article_candidate_row(repo, row)
+
+    cluster_data = article_ui.cluster_rows(repo, subscription_filter)
+    with st.expander("Clusters", expanded=False):
+        if not cluster_data:
+            st.info("No clusters yet.")
+        for item in cluster_data[:50]:
+            cluster = item["cluster"]
+            st.write(
+                f"{cluster.normalized_title or cluster.id} · {item['source_count']} sources · "
+                f"score {item['story_score']:.2f} · confidence {item['confidence']:.2f}"
+            )
+
+
+def _render_article_script_and_media(repo):
+    st.subheader("Script and media")
+    script_payload = st.session_state.get("article_mode_script")
+    article_id = st.session_state.get("article_mode_article_id", "")
+    if not script_payload:
+        st.info("Generate a script from a candidate to review scenes and render.")
+        return
+    try:
+        script = article_ui.GeneratedScript.model_validate(script_payload)
+    except Exception as exc:
+        st.error(f"Stored script is invalid: {exc}")
+        return
+
+    narration = st.text_area(
+        "Narration",
+        value=script.narration_text(),
+        height=180,
+        key="article_script_narration",
+    )
+    edit_cols = st.columns(2)
+    if edit_cols[0].button("Apply narration edit", key="article_apply_narration"):
+        st.session_state["article_mode_script"] = article_ui.update_script_narration(
+            script_payload, narration
+        )
+        st.rerun()
+    if edit_cols[1].button("Run automated review", key="article_run_review"):
+        try:
+            with st.spinner("Reviewing script"):
+                st.session_state["article_mode_script"] = article_ui.review_script_payload(
+                    repo, article_id, script_payload
+                )
+            st.success("Review updated")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Review failed: {exc}")
+
+    if script.review:
+        if script.review.approved:
+            st.success(f"Review approved with confidence {script.review.confidence:.2f}")
+        else:
+            st.warning(f"Review needs work: {'; '.join(script.review.issues)}")
+
+    for index, scene in enumerate(script.scenes):
+        with st.expander(f"Scene {index + 1}", expanded=index == 0):
+            st.write(scene.narration)
+            query_text = st.text_area(
+                "Visual queries",
+                value="\n".join(scene.visual_queries),
+                key=f"article_scene_queries_{index}",
+                height=80,
+            )
+            if st.button("Update visual queries", key=f"article_update_queries_{index}"):
+                try:
+                    st.session_state["article_mode_script"] = article_ui.update_scene_queries(
+                        script_payload, index, article_ui.lines_from_text(query_text)
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not update scene: {exc}")
+
+    with st.form("article_render_form"):
+        render_cols = st.columns(4)
+        media_mode = render_cols[0].selectbox(
+            "Media mode",
+            ["images_only", "videos_only", "mixed"],
+            key="article_render_media_mode",
+        )
+        image_source = render_cols[1].selectbox(
+            "Provider",
+            ["pexels", "pixabay", "coverr"],
+            key="article_render_provider",
+        )
+        aspect = render_cols[2].selectbox("Aspect ratio", ["9:16", "16:9", "1:1"], key="article_render_aspect")
+        voice_name = render_cols[3].text_input("Voice", value="", key="article_render_voice")
+        render_key = article_ui.render_task_key("render", script.id)
+        already_submitted = st.session_state.get("article_render_pending_key") == render_key
+        if st.form_submit_button(
+            "Render video",
+            type="primary",
+            disabled=already_submitted,
+            use_container_width=True,
+        ):
+            try:
+                with st.spinner("Submitting render task"):
+                    task_id = article_ui.submit_render_task(
+                        st.session_state["article_mode_script"],
+                        media_mode=media_mode,
+                        image_source=image_source,
+                        video_aspect=aspect,
+                        voice_name=voice_name,
+                    )
+                st.session_state["article_render_pending_key"] = render_key
+                st.session_state["current_generation_task_id"] = task_id
+                _add_active_generation_task(task_id, subject=script.title or "Article video")
+                st.success(f"Render submitted: {task_id}")
+            except Exception as exc:
+                st.error(f"Render submission failed: {exc}")
+
+    _render_current_generation_task()
+
+
+def _render_article_automation_controls():
+    st.subheader("Automation")
+    current = article_pipeline.load_automation_settings()
+    with st.form("article_automation_controls"):
+        mode = st.selectbox(
+            "Mode",
+            ["assisted", "automated", "autonomous"],
+            index=["assisted", "automated", "autonomous"].index(current.mode.value),
+            key="article_auto_mode",
+        )
+        score_cols = st.columns(3)
+        minimum_story = score_cols[0].slider("Minimum story score", 0.0, 1.0, current.minimum_story_score, 0.05)
+        minimum_confidence = score_cols[1].slider("Minimum confidence", 0.0, 1.0, current.minimum_confidence_score, 0.05)
+        minimum_visual = score_cols[2].slider("Minimum visual score", 0.0, 1.0, current.minimum_visual_score, 0.05)
+        publish_risk = st.selectbox(
+            "Maximum risk for automatic publishing",
+            ["low", "medium", "high"],
+            index=["low", "medium", "high"].index(current.maximum_risk_for_auto_publish.value),
+        )
+        limit_cols = st.columns(2)
+        max_generations = limit_cols[0].number_input("Daily generation limit", min_value=0, max_value=1000, value=current.max_generations_per_day)
+        max_publications = limit_cols[1].number_input("Daily publication limit", min_value=0, max_value=1000, value=current.max_publications_per_day)
+        assisted = st.checkbox("Assisted mode available", value=True, disabled=True)
+        auto_generate = st.checkbox("Auto-generate", value=current.auto_generate_enabled)
+        auto_render = st.checkbox("Auto-render", value=current.auto_render_enabled)
+        auto_publish = st.checkbox("Auto-publish", value=current.auto_publish_enabled)
+        if auto_publish:
+            st.error("Automatic publishing is enabled. Verify platform configuration and editorial policy before running the worker.")
+        st.info("Confidence scores are AI assessments, not guarantees of factual accuracy.")
+        if st.form_submit_button("Save automation settings", type="primary"):
+            config.app["article_automation_mode"] = mode
+            config.app["article_minimum_story_score"] = float(minimum_story)
+            config.app["article_minimum_confidence_score"] = float(minimum_confidence)
+            config.app["article_minimum_visual_score"] = float(minimum_visual)
+            config.app["article_maximum_risk_for_auto_publish"] = publish_risk
+            config.app["article_max_generations_per_day"] = int(max_generations)
+            config.app["article_max_publications_per_day"] = int(max_publications)
+            config.app["article_auto_generate_enabled"] = bool(auto_generate)
+            config.app["article_auto_render_enabled"] = bool(auto_render)
+            config.app["article_auto_publish_enabled"] = bool(auto_publish)
+            config.save_config()
+            st.success("Automation settings saved")
+    if assisted:
+        st.caption("Assisted mode prepares candidates and scripts without rendering or publishing.")
+
+
+def _render_article_mode():
+    repo = article_ui.repository()
+    article_tabs = st.tabs(["Subscriptions", "Candidates", "Script & media", "Automation"])
+    with article_tabs[0]:
+        _render_article_subscriptions(repo)
+    with article_tabs[1]:
+        _render_article_candidates(repo)
+    with article_tabs[2]:
+        _render_article_script_and_media(repo)
+    with article_tabs[3]:
+        _render_article_automation_controls()
 
 
 def _render_application():

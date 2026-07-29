@@ -1,5 +1,6 @@
 import os
 import random
+import re
 import threading
 from pathlib import Path
 from typing import Any, Callable, List
@@ -10,6 +11,7 @@ from loguru import logger
 from moviepy.video.io.VideoFileClip import VideoFileClip
 
 from app.config import config
+from app.models.article import MediaAsset, safe_public_page
 from app.models.schema import MaterialInfo, VideoAspect, VideoConcatMode
 from app.services import material_cache, task_artifacts
 from app.utils import utils
@@ -868,6 +870,393 @@ def _download_videos_by_script_order(
     logger.success(f"downloaded {len(video_paths)} ordered videos")
     _persist_material_sources(task_id, material_sources)
     return video_paths
+
+
+# =============================================================================
+# Article Mode: image providers and licensed-asset acquisition
+#
+# These adapters search stock-photo APIs (Pexels, Pixabay) and return typed
+# ``MediaAsset`` records carrying license/attribution/provenance so that an
+# images-only or mixed-media article video can be rendered with traceable
+# rights. Search-engine image scraping is intentionally NOT supported. An
+# article's own lead image is never auto-reused unless its license is known.
+# =============================================================================
+
+_PEXELS_LICENSE = ("Pexels License", "https://www.pexels.com/license/")
+_PIXABAY_LICENSE = ("Pixabay Content License", "https://pixabay.com/service/license-summary/")
+_COVERR_LICENSE = ("Coverr License", "https://coverr.co/license")
+_IMAGE_MAGIC_BYTES = (
+    b"\xff\xd8\xff",  # JPEG
+    b"\x89PNG\r\n\x1a\n",  # PNG
+    b"GIF87a",
+    b"GIF89a",
+    b"BM",  # BMP
+)
+_MIN_IMAGE_DIMENSION = 400
+_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+
+
+def _orientation_for(aspect: VideoAspect) -> str:
+    if aspect == VideoAspect.portrait:
+        return "portrait"
+    if aspect == VideoAspect.landscape:
+        return "landscape"
+    return "square"
+
+
+def search_images_pexels(
+    search_term: str,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    per_page: int = 20,
+) -> List[MediaAsset]:
+    aspect = VideoAspect(video_aspect)
+    api_key = get_api_key("pexels_api_keys")
+    headers = {"Authorization": api_key, "User-Agent": "MoneyPrinterTurbo/ArticleMode"}
+    params = {
+        "query": search_term,
+        "per_page": per_page,
+        "orientation": _orientation_for(aspect),
+    }
+    query_url = f"https://api.pexels.com/v1/search?{urlencode(params)}"
+    logger.info(f"searching images on pexels: term={search_term!r}")
+    try:
+        r = requests.get(
+            query_url, headers=headers, proxies=config.proxy,
+            verify=_get_tls_verify(), timeout=(30, 60),
+        )
+        response = r.json()
+        assets: List[MediaAsset] = []
+        for photo in response.get("photos", []) or []:
+            src = photo.get("src") or {}
+            download_url = src.get("large2x") or src.get("large") or src.get("original")
+            if not download_url:
+                continue
+            assets.append(
+                MediaAsset(
+                    media_type="image",
+                    provider="pexels",
+                    url=download_url,
+                    width=int(photo.get("width") or 0),
+                    height=int(photo.get("height") or 0),
+                    asset_id=str(photo.get("id") or ""),
+                    creator=str(photo.get("photographer") or ""),
+                    license_name=_PEXELS_LICENSE[0],
+                    license_url=_PEXELS_LICENSE[1],
+                    attribution_text=(
+                        f"Photo by {photo.get('photographer', 'Pexels')} on Pexels"
+                    ),
+                    source_page_url=safe_public_page(photo.get("url")),
+                    search_query=search_term,
+                )
+            )
+        return assets
+    except Exception as e:
+        logger.error(
+            "pexels image search failed: "
+            f"error={type(e).__name__}, detail={_redact_request_error(e, api_key)}"
+        )
+    return []
+
+
+def search_images_pixabay(
+    search_term: str,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    per_page: int = 20,
+) -> List[MediaAsset]:
+    aspect = VideoAspect(video_aspect)
+    api_key = get_api_key("pixabay_api_keys")
+    orientation = "vertical" if aspect == VideoAspect.portrait else (
+        "horizontal" if aspect == VideoAspect.landscape else "all"
+    )
+    params = {
+        "key": api_key,
+        "q": search_term,
+        "image_type": "photo",
+        "orientation": orientation,
+        "per_page": max(3, per_page),
+        "safesearch": "true",
+    }
+    query_url = f"https://pixabay.com/api/?{urlencode(params)}"
+    logger.info(f"searching images on pixabay: term={search_term!r}")
+    try:
+        r = requests.get(
+            query_url, proxies=config.proxy, verify=_get_tls_verify(), timeout=(30, 60)
+        )
+        if _is_cloudflare_challenge(r):
+            logger.error("pixabay image search was blocked by a Cloudflare challenge")
+            return []
+        response = r.json()
+        assets: List[MediaAsset] = []
+        for hit in response.get("hits", []) or []:
+            download_url = hit.get("largeImageURL") or hit.get("webformatURL")
+            if not download_url:
+                continue
+            assets.append(
+                MediaAsset(
+                    media_type="image",
+                    provider="pixabay",
+                    url=download_url,
+                    width=int(hit.get("imageWidth") or 0),
+                    height=int(hit.get("imageHeight") or 0),
+                    asset_id=str(hit.get("id") or ""),
+                    creator=str(hit.get("user") or ""),
+                    license_name=_PIXABAY_LICENSE[0],
+                    license_url=_PIXABAY_LICENSE[1],
+                    attribution_text=(
+                        f"Image by {hit.get('user', 'Pixabay')} on Pixabay"
+                    ),
+                    source_page_url=safe_public_page(hit.get("pageURL")),
+                    search_query=search_term,
+                )
+            )
+        return assets
+    except Exception as e:
+        logger.error(
+            "pixabay image search failed: "
+            f"error={type(e).__name__}, detail={_redact_request_error(e, api_key)}"
+        )
+    return []
+
+
+def search_images(
+    provider: str,
+    search_term: str,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    per_page: int = 20,
+) -> List[MediaAsset]:
+    """Dispatch to a configured image provider. Unknown providers return []."""
+    provider = (provider or "pexels").strip().lower()
+    if provider == "pixabay":
+        return search_images_pixabay(search_term, video_aspect, per_page)
+    if provider == "pexels":
+        return search_images_pexels(search_term, video_aspect, per_page)
+    logger.warning(f"unsupported image provider: {provider}")
+    return []
+
+
+def _material_video_to_asset(item: MaterialInfo, search_term: str) -> MediaAsset:
+    source = item.source_info if isinstance(item.source_info, dict) else {}
+    provider = str(item.provider or source.get("provider") or "").lower()
+    rendition = source.get("rendition") if isinstance(source.get("rendition"), dict) else {}
+    creator_info = _creator_info(source.get("creator")) or {}
+    license_name, license_url = {
+        "pixabay": _PIXABAY_LICENSE,
+        "coverr": _COVERR_LICENSE,
+    }.get(provider, _PEXELS_LICENSE)
+    creator = creator_info.get("name", "")
+    provider_label = provider.capitalize() if provider else "stock provider"
+    return MediaAsset(
+        media_type="video",
+        provider=provider,
+        url=item.url,
+        width=int(rendition.get("width") or 0),
+        height=int(rendition.get("height") or 0),
+        duration=float(item.duration or 0),
+        asset_id=str(source.get("asset_id") or ""),
+        creator=creator,
+        license_name=license_name,
+        license_url=license_url,
+        attribution_text=(
+            f"Video by {creator} on {provider_label}" if creator else f"Video from {provider_label}"
+        ),
+        source_page_url=safe_public_page(source.get("source_page")),
+        search_query=search_term,
+    )
+
+
+def search_video_assets(
+    provider: str,
+    search_term: str,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    minimum_duration: int = 1,
+) -> List[MediaAsset]:
+    provider = (provider or "pexels").strip().lower()
+    searchers = {
+        "pexels": search_videos_pexels,
+        "pixabay": search_videos_pixabay,
+        "coverr": search_videos_coverr,
+    }
+    searcher = searchers.get(provider)
+    if searcher is None:
+        logger.warning(f"unsupported video provider for article mode: {provider}")
+        return []
+    return [
+        _material_video_to_asset(item, search_term)
+        for item in searcher(search_term, minimum_duration, video_aspect)
+    ]
+
+
+def validate_image_file(image_path: str) -> tuple[int, int]:
+    """Validate a downloaded image by magic bytes, size and dimensions.
+
+    Returns ``(width, height)`` or raises ``ValueError``. This is a technical
+    safety check (is this really a usable image?), not an editorial one."""
+    if not os.path.isfile(image_path):
+        raise ValueError("image file does not exist")
+    size = os.path.getsize(image_path)
+    if size == 0 or size > _MAX_IMAGE_BYTES:
+        raise ValueError(f"image file size out of range: {size} bytes")
+    with open(image_path, "rb") as fp:
+        header = fp.read(16)
+    is_webp = header[:4] == b"RIFF" and header[8:12] == b"WEBP"
+    if not is_webp and not any(header.startswith(magic) for magic in _IMAGE_MAGIC_BYTES):
+        raise ValueError("file is not a supported image type")
+    from PIL import Image as _Image
+
+    with _Image.open(image_path) as im:
+        im.verify()
+    with _Image.open(image_path) as im:
+        width, height = im.size
+    if width < _MIN_IMAGE_DIMENSION or height < _MIN_IMAGE_DIMENSION:
+        raise ValueError(f"image dimensions too small: {width}x{height}")
+    return width, height
+
+
+def save_image(image_url: str, save_dir: str = "") -> str:
+    """Download and validate a remote image. Returns the local path or ""."""
+    if not save_dir:
+        save_dir = utils.storage_dir("cache_images", create=True)
+    os.makedirs(save_dir, exist_ok=True)
+    url_without_query = image_url.split("?")[0]
+    ext = utils.parse_extension(url_without_query) or "jpg"
+    if ext not in ("jpg", "jpeg", "png", "webp", "bmp", "gif"):
+        ext = "jpg"
+    image_path = os.path.join(save_dir, f"img-{utils.md5(url_without_query)}.{ext}")
+    if os.path.exists(image_path) and os.path.getsize(image_path) > 0:
+        try:
+            validate_image_file(image_path)
+            return image_path
+        except ValueError:
+            try:
+                os.remove(image_path)
+            except OSError:
+                pass
+    headers = {"User-Agent": "Mozilla/5.0 MoneyPrinterTurbo/ArticleMode"}
+    try:
+        with requests.get(
+            image_url, headers=headers, proxies=config.proxy,
+            verify=_get_tls_verify(), timeout=(30, 120), stream=True,
+        ) as r:
+            r.raise_for_status()
+            downloaded = 0
+            with open(image_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=65536):
+                    if not chunk:
+                        continue
+                    downloaded += len(chunk)
+                    if downloaded > _MAX_IMAGE_BYTES:
+                        raise ValueError("image exceeds maximum size")
+                    f.write(chunk)
+        validate_image_file(image_path)
+        return image_path
+    except Exception as e:
+        logger.warning(
+            "failed to download image: "
+            f"error={type(e).__name__}, detail={_redact_request_error(e, image_url)}"
+        )
+        try:
+            if os.path.exists(image_path):
+                os.remove(image_path)
+        except OSError:
+            pass
+    return ""
+
+
+def score_asset_relevance(
+    asset: MediaAsset,
+    query: str,
+    entities: List[str] | None = None,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+) -> float:
+    """Deterministic relevance signal for a candidate asset (0..1).
+
+    Combines query/metadata token overlap, orientation fit and resolution. This
+    is a fast pre-filter; an optional multimodal scorer can be layered on top via
+    the pipeline without changing this interface."""
+    query_tokens = {t for t in re.split(r"[^a-z0-9]+", (query or "").lower()) if len(t) > 2}
+    meta = f"{asset.search_query} {asset.creator} {asset.attribution_text}".lower()
+    meta_tokens = {t for t in re.split(r"[^a-z0-9]+", meta) if len(t) > 2}
+    overlap = len(query_tokens & meta_tokens) / max(1, len(query_tokens)) if query_tokens else 0.5
+    entity_bonus = 0.0
+    if entities:
+        entity_text = meta
+        entity_bonus = 0.1 * sum(1 for e in entities if e.lower() in entity_text)
+    aspect = VideoAspect(video_aspect)
+    orient_score = 0.5
+    if asset.width and asset.height:
+        ratio = asset.width / asset.height
+        target = {"9:16": 9 / 16, "16:9": 16 / 9, "1:1": 1.0}[aspect.value]
+        orient_score = max(0.0, 1.0 - min(1.0, abs(ratio - target) / target))
+    resolution_score = min(1.0, (min(asset.width, asset.height) or 0) / 1080.0)
+    score = 0.5 * overlap + 0.2 * orient_score + 0.2 * resolution_score + entity_bonus
+    return round(max(0.0, min(1.0, score)), 4)
+
+
+def select_scene_assets(
+    provider: str,
+    scenes,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    entities: List[str] | None = None,
+    media_mode: str = "images_only",
+    searcher=None,
+) -> List[MediaAsset]:
+    """Pick one best asset per scene, in scene order.
+
+    For each scene we try its ``visual_queries`` in order, score candidates,
+    and keep the highest-scoring non-duplicate. Continues with the best
+    available visual rather than blocking when results are thin. ``searcher`` is
+    injectable for tests."""
+    def _default_search(query: str) -> List[MediaAsset]:
+        mode = str(media_mode or "images_only")
+        assets: List[MediaAsset] = []
+        if mode in {"images_only", "mixed"}:
+            assets.extend(search_images(provider, query, video_aspect))
+        if mode in {"videos_only", "mixed"}:
+            assets.extend(search_video_assets(provider, query, video_aspect))
+        return assets
+
+    search = searcher or _default_search
+    chosen: List[MediaAsset] = []
+    used_asset_keys: set = set()
+    for beat_index, scene in enumerate(scenes):
+        queries = list(getattr(scene, "visual_queries", []) or [])
+        if not queries:
+            queries = [getattr(scene, "narration", "")[:60]]
+        best: MediaAsset | None = None
+        best_score = -1.0
+        for query in queries:
+            for asset in search(query) or []:
+                key = (
+                    f"{asset.provider}:{asset.asset_id}"
+                    if asset.provider and asset.asset_id
+                    else asset.url
+                )
+                if key in used_asset_keys:
+                    continue
+                asset.search_query = query
+                asset.relevance_score = score_asset_relevance(
+                    asset, query, entities, video_aspect
+                )
+                if asset.relevance_score > best_score:
+                    best, best_score = asset, asset.relevance_score
+            if best is not None and best_score >= 0.6:
+                break  # good enough; don't burn extra queries
+        if best is not None:
+            best.beat_index = beat_index
+            best.illustrative = bool(getattr(scene, "is_contextual_visual", True))
+            best.selection_reason = (
+                f"best of query {best.search_query!r} "
+                f"(relevance {best.relevance_score:.2f})"
+            )
+            used_key = (
+                f"{best.provider}:{best.asset_id}"
+                if best.provider and best.asset_id
+                else best.url
+            )
+            if used_key:
+                used_asset_keys.add(used_key)
+            chosen.append(best)
+    return chosen
 
 
 if __name__ == "__main__":

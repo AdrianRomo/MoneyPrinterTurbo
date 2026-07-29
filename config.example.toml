@@ -272,6 +272,75 @@ upload_post_youtube_privacy_status = "public"
 # Cross-post jobs run in the current process and are not resumed after restart.
 upload_post_max_pending_tasks = 10
 
+# -----------------------------------------------------------------------------
+# Article Mode / 文章模式 (automation-first news-to-video)
+# -----------------------------------------------------------------------------
+# Article Mode polls RSS/Atom feeds or single article URLs, uses the configured
+# LLM to score and summarize stories, generates a source-grounded short-form
+# script, selects licensed stock visuals, and renders a video. It does NOT
+# guarantee truth and is not professional fact-checking. Videos are labelled
+# "Generated from available sources." Read docs/article-mode-en.md first.
+
+# SQLite database for subscriptions, articles, clusters and scores. Empty uses
+# storage/article/articles.db. The polling worker and API share this file.
+article_database_path = ""
+
+# Fetch limits for untrusted article/feed content (SSRF-protected, size-capped).
+article_request_timeout = 20
+article_max_bytes = 5242880        # 5 MB response cap per fetch
+article_max_text_length = 40000    # max extracted characters kept per article
+
+# Default ingestion behaviour (per-subscription values override these).
+article_default_freshness_hours = 72
+article_poll_interval_minutes = 60
+# Corroboration is a soft preference, not a hard gate (see thresholds below).
+article_default_min_independent_sources = 1
+article_trusted_domains = []       # e.g. ["reuters.com", "apnews.com"]
+article_blocked_domains = []
+
+# Image provider for images-only / mixed media. "pexels" or "pixabay"; reuses
+# the pexels_api_keys / pixabay_api_keys configured above.
+article_image_provider = "pexels"
+# Voice used by unattended Article Mode worker renders. Set this to an Edge,
+# Azure, Gemini, SiliconFlow, Mimo, ElevenLabs or Chatterbox voice for narrated
+# production videos. The no-voice fallback creates local timed silent audio and
+# is useful for offline validation.
+article_voice_name = "no-voice"
+# Default media mode for article videos: "images_only", "videos_only", "mixed".
+article_media_mode = "images_only"
+# Add a small on-screen "illustrative visuals" flag for generic contextual media.
+article_add_illustrative_label = true
+
+# --- Automation thresholds (all scores compared on a 0..1 scale) -------------
+# Mode: "assisted" (stop before render), "automated" (render, stop before
+# publish), or "autonomous" (render + publish).
+article_automation_mode = "assisted"
+article_minimum_story_score = 0.6
+article_minimum_confidence_score = 0.6
+article_minimum_visual_score = 0.4
+article_auto_generate_enabled = true
+article_auto_render_enabled = false
+article_auto_publish_enabled = false        # keep disabled by default
+article_auto_rewrite_attempts = 1
+article_allow_single_source_stories = true
+article_allow_unverified_developing_stories = true
+# Max AI-assessed risk that may still auto-publish: "low", "medium", "high".
+article_maximum_risk_for_auto_publish = "low"
+# Daily safety caps for the worker.
+article_max_generations_per_day = 20
+article_max_publications_per_day = 10
+
+# --- Sensitive topics --------------------------------------------------------
+# Sensitive stories may still be generated, but by default require human
+# approval before publishing and keep uncertainty language. Set to false to let
+# autonomous mode publish them (not recommended).
+article_require_review_for_sensitive_topics = true
+# Categories the reviewer should treat with extra care.
+article_sensitive_categories = [
+    "politics", "health", "finance", "legal", "crime", "war",
+    "emergency", "disaster", "death",
+]
+
 # =============================================================================
 # Whisper Subtitles / Whisper 字幕
 # =============================================================================

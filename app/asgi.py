@@ -32,14 +32,14 @@ async def application_lifespan(_: FastAPI):
         logger.info("shutdown event")
 
 
-def exception_handler(request: Request, e: HttpException):
+async def exception_handler(request: Request, e: HttpException):
     return JSONResponse(
         status_code=e.status_code,
         content=utils.get_response(e.status_code, e.data, e.message),
     )
 
 
-def validation_exception_handler(request: Request, e: RequestValidationError):
+async def validation_exception_handler(request: Request, e: RequestValidationError):
     return JSONResponse(
         status_code=400,
         content=utils.get_response(

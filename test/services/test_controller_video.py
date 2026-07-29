@@ -180,8 +180,10 @@ class TestVideoControllerTasks(unittest.TestCase):
             "get_all_tasks",
             return_value=([{"id": "task-1", "cross_post_owner": "internal"}], 21),
         ) as get_all:
-            response = video_controller.get_all_tasks(
-                self._request(), page=2, page_size=10
+            response = asyncio.run(
+                video_controller.get_all_tasks(
+                    self._request(), page=2, page_size=10
+                )
             )
 
         self.assertEqual(
@@ -214,8 +216,10 @@ class TestVideoControllerTasks(unittest.TestCase):
                 cross_post_owner="localhost:123:internal",
             )
             with patch.dict(config.app, {"endpoint": ""}):
-                response = video_controller.get_task(
-                    self._request(), task_id=task_id, query=MagicMock()
+                response = asyncio.run(
+                    video_controller.get_task(
+                        self._request(), task_id=task_id, query=MagicMock()
+                    )
                 )
 
             self.assertEqual(
@@ -244,8 +248,10 @@ class TestVideoControllerTasks(unittest.TestCase):
             "get_task",
             return_value=failed_task,
         ):
-            response = video_controller.get_task(
-                self._request(), task_id="failed-task", query=MagicMock()
+            response = asyncio.run(
+                video_controller.get_task(
+                    self._request(), task_id="failed-task", query=MagicMock()
+                )
             )
 
         self.assertEqual(response["data"], failed_task)
@@ -291,8 +297,10 @@ class TestVideoControllerTasks(unittest.TestCase):
                 return_value=task,
             ), patch.object(video_controller.sm.state, "delete_task") as delete_task:
                 with self.assertRaises(HttpException) as raised:
-                    video_controller.delete_video(
-                        self._request(), task_id=task["task_id"]
+                    asyncio.run(
+                        video_controller.delete_video(
+                            self._request(), task_id=task["task_id"]
+                        )
                     )
 
                 self.assertEqual(raised.exception.status_code, 409)
@@ -318,8 +326,10 @@ class TestVideoControllerTasks(unittest.TestCase):
         ), patch.object(
             video_controller.os.path, "exists", return_value=False
         ), patch.object(video_controller.sm.state, "delete_task") as delete_task:
-            response = video_controller.delete_video(
-                self._request(), task_id="completed-task"
+            response = asyncio.run(
+                video_controller.delete_video(
+                    self._request(), task_id="completed-task"
+                )
             )
 
         self.assertEqual(response["status"], 200)
@@ -338,7 +348,7 @@ class TestVideoControllerTasks(unittest.TestCase):
             ):
                 with self.subTest(operation=operation):
                     with self.assertRaises(HttpException) as raised:
-                        operation()
+                        asyncio.run(operation())
                     self.assertEqual(raised.exception.status_code, 404)
 
 
@@ -362,8 +372,10 @@ class TestVideoControllerFiles(unittest.TestCase):
                 "storage_dir",
                 return_value=temp_dir,
             ):
-                response = video_controller.upload_video_material_file(
-                    self._request(), upload
+                response = asyncio.run(
+                    video_controller.upload_video_material_file(
+                        self._request(), upload
+                    )
                 )
 
             self.assertEqual(response["data"]["file"], "clip.MOV")
@@ -374,8 +386,10 @@ class TestVideoControllerFiles(unittest.TestCase):
                 file=BytesIO(b"not-an-image"),
             )
             with self.assertRaises(HttpException) as raised:
-                video_controller.upload_video_material_file(
-                    self._request(), invalid_upload
+                asyncio.run(
+                    video_controller.upload_video_material_file(
+                        self._request(), invalid_upload
+                    )
                 )
             self.assertEqual(raised.exception.status_code, 400)
 

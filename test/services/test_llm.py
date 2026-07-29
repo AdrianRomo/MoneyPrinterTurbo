@@ -1473,7 +1473,10 @@ class TestSocialMetadata(unittest.TestCase):
         self.assertNotIn("y" * (llm.MAX_SOCIAL_SCRIPT_LENGTH + 1), prompt)
 
     def test_social_metadata_endpoint_response_shape(self):
-        from fastapi.testclient import TestClient
+        import asyncio
+
+        import httpx
+        from httpx import ASGITransport
 
         from app.asgi import app
 
@@ -1490,10 +1493,17 @@ class TestSocialMetadata(unittest.TestCase):
         )
 
         with patch.object(llm, "_generate_response", return_value=llm_response):
-            response = TestClient(app).post(
-                "/api/v1/social-metadata",
-                json=request_body,
-            )
+            async def _request():
+                async with httpx.AsyncClient(
+                    transport=ASGITransport(app=app),
+                    base_url="http://testserver",
+                ) as client:
+                    return await client.post(
+                        "/api/v1/social-metadata",
+                        json=request_body,
+                    )
+
+            response = asyncio.run(_request())
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(

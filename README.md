@@ -121,6 +121,7 @@
 - [x] 支持使用自己的 **本地素材**，也可从 **Pexels**、**Pixabay** 和 **Coverr** 获取可免费使用的高清素材
 - [x] 支持 **Kimi / Moonshot AI**、**OpenAI**、**Google Gemini**、**DeepSeek**、**阿里云通义千问**、**Microsoft Azure OpenAI**、**火山引擎方舟**、**xAI Grok**、**MiniMax**、**小米 MiMo** 等主流模型服务，并兼容 **Cloudflare AI Gateway**、**魔搭 ModelScope**、**AIHubMix**、**AIML API**、**EvoLink**、**Ollama**、**OneAPI**、**LiteLLM**、**Groq**、**Pollinations AI** 等统一网关、聚合平台和本地运行环境
 - [x] 支持一键 **跨平台发布**，生成完成后可自动上传至 **TikTok**、**Instagram** 和 **YouTube Shorts**
+- [x] 支持 **文章模式** —— 将 RSS/Atom 订阅或文章 URL 自动生成“有来源依据”的新闻视频，包含 AI 打分、自动审校、授权图片/混合素材，以及可配置的 **协助 / 自动 / 全自主** 自动化模式（详见 [docs/article-mode-zh.md](docs/article-mode-zh.md)）。输出标注 *"Generated from available sources"*，不保证内容真实。
 
 ## 作品展示 🎬
 

@@ -122,6 +122,23 @@ class VideoParams(BaseModel):
     video_script_prompt: str = Field(default="", max_length=2000)
     custom_system_prompt: str = Field(default="", max_length=8000)
 
+    # -----------------------------------------------------------------------
+    # Article Mode (backward compatible).
+    #
+    # Every field below has a safe default that preserves the original
+    # topic-to-video behaviour. Existing API payloads, saved tasks and CLI
+    # commands that never set these keep running unchanged:
+    #   content_mode="topic" + media_mode="videos_only" == legacy pipeline.
+    # -----------------------------------------------------------------------
+    content_mode: Optional[str] = "topic"  # topic | article_url | article_feed
+    media_mode: Optional[str] = "videos_only"  # videos_only | images_only | mixed
+    article_url: Optional[str] = None  # source article for content_mode="article_url"
+    article_id: Optional[str] = None  # persisted article for content_mode="article_feed"
+    image_source: Optional[str] = "pexels"  # image provider for images/mixed media
+    # Serialized GeneratedScript (scenes + social metadata) produced by the
+    # article pipeline, so the render task does not re-run ingestion. Optional.
+    article_script: Optional[dict] = None
+
 
 class SubtitleRequest(BaseModel):
     video_script: str

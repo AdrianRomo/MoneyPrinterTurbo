@@ -208,6 +208,51 @@ Output and exit status:
         help="replace the default LLM system prompt for script generation",
     )
 
+    article_group = parser.add_argument_group("article mode")
+    article_group.add_argument(
+        "--content-mode",
+        choices=["topic", "article_url", "article_feed"],
+        default=None,
+        help="content pipeline; 'topic' (default) preserves the original workflow",
+    )
+    article_group.add_argument(
+        "--media-mode",
+        choices=["videos_only", "images_only", "mixed"],
+        default=None,
+        help="visual assets for the video (default preserves videos_only for topic)",
+    )
+    article_group.add_argument(
+        "--article-url",
+        default=None,
+        help="source article URL (implies --content-mode article_url)",
+    )
+    article_group.add_argument(
+        "--article-id",
+        default=None,
+        help="stored article id to generate from (implies --content-mode article_feed)",
+    )
+    article_group.add_argument(
+        "--image-source",
+        choices=["pexels", "pixabay"],
+        default=None,
+        help="image provider for images-only/mixed article videos",
+    )
+    article_group.add_argument(
+        "--poll-subscription",
+        default=None,
+        help="poll the given subscription id, print results and exit",
+    )
+    article_group.add_argument(
+        "--list-articles",
+        action="store_true",
+        help="list stored article candidates and exit",
+    )
+    article_group.add_argument(
+        "--approve-article",
+        default=None,
+        help="article id to assess, generate and render a video from, then exit",
+    )
+
     material_group = parser.add_argument_group("materials and pipeline")
     material_group.add_argument(
         "--video-source",
@@ -448,7 +493,21 @@ Output and exit status:
     )
     args = parser.parse_args(argv)
 
-    if not args.video_subject.strip() and not args.video_script.strip():
+    # Article-mode actions and renders do not need a video subject/script.
+    article_action = bool(
+        args.poll_subscription or args.list_articles or args.approve_article
+    )
+    article_render = (
+        args.content_mode in ("article_url", "article_feed")
+        or bool(args.article_url)
+        or bool(args.article_id)
+    )
+    if (
+        not article_action
+        and not article_render
+        and not args.video_subject.strip()
+        and not args.video_script.strip()
+    ):
         parser.error("one of --video-subject or --video-script is required")
 
     if args.video_source == "local" and args.stop_at == "terms":
@@ -568,6 +627,24 @@ def build_video_params(args: argparse.Namespace) -> VideoParams:
         params_kwargs["text_background_color"] = args.subtitle_background_color
     elif args.subtitle_background_enabled is True:
         params_kwargs["text_background_color"] = True
+
+    # Article mode (backward compatible: only set when explicitly requested).
+    content_mode = args.content_mode
+    if content_mode is None:
+        if args.article_url:
+            content_mode = "article_url"
+        elif args.article_id:
+            content_mode = "article_feed"
+    if content_mode:
+        params_kwargs["content_mode"] = content_mode
+    if args.media_mode is not None:
+        params_kwargs["media_mode"] = args.media_mode
+    if args.article_url is not None:
+        params_kwargs["article_url"] = args.article_url
+    if args.article_id is not None:
+        params_kwargs["article_id"] = args.article_id
+    if args.image_source is not None:
+        params_kwargs["image_source"] = args.image_source
 
     return VideoParams(**params_kwargs)
 
@@ -756,8 +833,59 @@ def prepare_cli_files(params: VideoParams, stop_at: str) -> None:
         material.url = prepared_path
 
 
+def _run_article_actions(args: argparse.Namespace) -> int | None:
+    """Handle article-mode utility actions that exit before rendering.
+
+    Returns an exit code when an action ran, or ``None`` to continue to the
+    normal render path."""
+    if not (args.poll_subscription or args.list_articles or args.approve_article):
+        return None
+
+    from app.services import article_worker
+    from app.services.article_repository import get_repository
+
+    repo = get_repository()
+
+    if args.list_articles:
+        articles = repo.list_articles(limit=100)
+        print(json.dumps([a.public_dict() for a in articles], ensure_ascii=False, indent=2))
+        return 0
+
+    if args.poll_subscription:
+        subscription = repo.get_subscription(args.poll_subscription)
+        if not subscription:
+            logger.error(f"subscription not found: {args.poll_subscription}")
+            return 1
+        run, new_articles, clusters = article_worker.poll_subscription(repo, subscription)
+        print(
+            json.dumps(
+                {
+                    "poll": run.model_dump(mode="json"),
+                    "articles": len(new_articles),
+                    "clusters": len(clusters),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+
+    # --approve-article: assess, generate and render from a stored article.
+    return None
+
+
 def run_cli(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+
+    action_result = _run_article_actions(args)
+    if action_result is not None:
+        return action_result
+
+    # --approve-article renders through the standard task path via article_id.
+    if args.approve_article:
+        args.article_id = args.approve_article
+        args.content_mode = "article_feed"
+
     try:
         params = build_video_params(args)
         prepare_cli_files(params, stop_at=args.stop_at)

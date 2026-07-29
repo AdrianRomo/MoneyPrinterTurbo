@@ -90,11 +90,11 @@ def root_dir():
 
 
 def storage_dir(sub_dir: str = "", create: bool = False):
-    d = os.path.join(root_dir(), "storage")
+    d = os.getenv("MPT_STORAGE_DIR") or os.path.join(root_dir(), "storage")
     if sub_dir:
         d = os.path.join(d, sub_dir)
     if create and not os.path.exists(d):
-        os.makedirs(d)
+        os.makedirs(d, exist_ok=True)
 
     return d
 
@@ -111,7 +111,7 @@ def task_dir(sub_dir: str = ""):
     if sub_dir:
         d = os.path.join(d, sub_dir)
     if not os.path.exists(d):
-        os.makedirs(d)
+        os.makedirs(d, exist_ok=True)
     return d
 
 

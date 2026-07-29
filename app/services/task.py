@@ -1282,6 +1282,17 @@ def start(
 ):
     """执行任务流水线，并确保未预期异常也会转换成可查询的失败状态。"""
     try:
+        # Article Mode routes to a dedicated pipeline that swaps the material
+        # step for a source-grounded visual timeline. content_mode defaults to
+        # "topic", so existing topic tasks keep the exact same behaviour.
+        content_mode = str(getattr(params, "content_mode", "topic") or "topic")
+        if content_mode in ("article_url", "article_feed"):
+            # Imported lazily to avoid a module-load import cycle.
+            from app.services import article_pipeline
+
+            return article_pipeline.render_article_video(
+                task_id, params, stop_at=stop_at
+            )
         return _run_pipeline(
             task_id,
             params,

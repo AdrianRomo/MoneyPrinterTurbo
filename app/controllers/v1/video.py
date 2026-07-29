@@ -172,21 +172,21 @@ def _parse_byte_range(
 
 
 @router.post("/videos", response_model=TaskResponse, summary="Generate a short video")
-def create_video(
+async def create_video(
     background_tasks: BackgroundTasks, request: Request, body: TaskVideoRequest
 ):
     return create_task(request, body, stop_at="video")
 
 
 @router.post("/subtitle", response_model=TaskResponse, summary="Generate subtitle only")
-def create_subtitle(
+async def create_subtitle(
     background_tasks: BackgroundTasks, request: Request, body: SubtitleRequest
 ):
     return create_task(request, body, stop_at="subtitle")
 
 
 @router.post("/audio", response_model=TaskResponse, summary="Generate audio only")
-def create_audio(
+async def create_audio(
     background_tasks: BackgroundTasks, request: Request, body: AudioRequest
 ):
     return create_task(request, body, stop_at="audio")
@@ -223,7 +223,7 @@ def create_task(
         )
 
 @router.get("/tasks", response_model=TaskListResponse, summary="Get all tasks")
-def get_all_tasks(
+async def get_all_tasks(
     request: Request,
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1),
@@ -243,7 +243,7 @@ def get_all_tasks(
 @router.get(
     "/tasks/{task_id}", response_model=TaskQueryResponse, summary="Query task status"
 )
-def get_task(
+async def get_task(
     request: Request,
     task_id: str = Path(..., description="Task ID"),
     query: TaskQueryRequest = Depends(),
@@ -277,7 +277,7 @@ def get_task(
     response_model=TaskDeletionResponse,
     summary="Delete a generated short video task",
 )
-def delete_video(request: Request, task_id: str = Path(..., description="Task ID")):
+async def delete_video(request: Request, task_id: str = Path(..., description="Task ID")):
     request_id = base.get_task_id(request)
     task = sm.state.get_task(task_id)
     if task:
@@ -310,7 +310,7 @@ def delete_video(request: Request, task_id: str = Path(..., description="Task ID
 @router.get(
     "/musics", response_model=BgmRetrieveResponse, summary="Retrieve local BGM files"
 )
-def get_bgm_list(request: Request):
+async def get_bgm_list(request: Request):
     bgm_list = []
     for file in bgm_service.list_bgm_files():
         filename = os.path.basename(file)
@@ -340,7 +340,7 @@ def get_bgm_list(request: Request):
         500: {"description": "FFmpeg validation or persistent storage is unavailable"},
     },
 )
-def upload_bgm_file(request: Request, file: UploadFile = File(...)):
+async def upload_bgm_file(request: Request, file: UploadFile = File(...)):
     request_id = base.get_task_id(request)
     try:
         safe_filename = bgm_service.save_bgm_upload(file.filename, file.file)
@@ -373,7 +373,7 @@ def upload_bgm_file(request: Request, file: UploadFile = File(...)):
 @router.get(
     "/video_materials", response_model=VideoMaterialRetrieveResponse, summary="Retrieve local video materials"
 )
-def get_video_materials_list(request: Request):
+async def get_video_materials_list(request: Request):
     allowed_suffixes = ("mp4", "mov", "avi", "flv", "mkv", "jpg", "jpeg", "png")
     local_videos_dir = utils.storage_dir("local_videos", create=True)
     files = []
@@ -403,7 +403,7 @@ def get_video_materials_list(request: Request):
     response_model=VideoMaterialUploadResponse,
     summary="Upload the video material file to the local videos directory",
 )
-def upload_video_material_file(request: Request, file: UploadFile = File(...)):
+async def upload_video_material_file(request: Request, file: UploadFile = File(...)):
     request_id = base.get_task_id(request)
     safe_filename = _sanitize_upload_filename(file.filename, request_id)
     # check file ext
@@ -436,7 +436,7 @@ async def stream_video(request: Request, file_path: str):
     start, end = _parse_byte_range(range_header, video_size, request_id)
     length = end - start + 1
 
-    def file_iterator(file_path, offset=0, bytes_to_read=None):
+    async def file_iterator(file_path, offset=0, bytes_to_read=None):
         with open(file_path, "rb") as f:
             f.seek(offset, os.SEEK_SET)
             remaining = bytes_to_read or video_size

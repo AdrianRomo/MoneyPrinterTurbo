@@ -21,9 +21,10 @@ from moviepy import (
     TextClip,
     VideoFileClip,
     afx,
+    vfx,
 )
 from moviepy.video.tools.subtitles import SubtitlesClip
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from app.config import config
 from app.models import const
@@ -1265,6 +1266,189 @@ def generate_video(
             fps=fps,
         )
         return bgm_mix_succeeded
+
+
+# =============================================================================
+# Article Mode: unified image/video clip normalization
+#
+# Article videos show one visual per script scene, in order, each for a computed
+# duration. To reuse the existing ffmpeg concat pipeline we normalize every
+# asset (image OR video) into a target-aspect MP4 of the right duration, then
+# concatenate. Images get a subtle Ken Burns move; videos are scaled+letterboxed
+# like the topic pipeline. Raw image paths are never handed to VideoFileClip.
+# =============================================================================
+
+_KEN_BURNS_ZOOM = 0.08  # +8% zoom across the clip; subtle, configurable
+
+
+def _cover_crop_image(image_path: str, target_size: tuple[int, int]) -> str:
+    """Return a cleaned PNG cropped to exactly ``target_size`` (cover fit).
+
+    EXIF orientation is applied, metadata is stripped by re-encoding, and the
+    image is centre-cropped so the whole frame is filled without black bars."""
+    target_w, target_h = target_size
+    with Image.open(image_path) as im:
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        src_w, src_h = im.size
+        target_ratio = target_w / target_h
+        src_ratio = src_w / src_h
+        if src_ratio > target_ratio:
+            new_h = target_h
+            new_w = max(target_w, round(target_h * src_ratio))
+        else:
+            new_w = target_w
+            new_h = max(target_h, round(target_w / src_ratio))
+        im = im.resize((new_w, new_h), Image.LANCZOS)
+        left = (new_w - target_w) // 2
+        top = (new_h - target_h) // 2
+        im = im.crop((left, top, left + target_w, top + target_h))
+        cleaned_path = f"{image_path}.norm.png"
+        im.save(cleaned_path, format="PNG")
+    return cleaned_path
+
+
+def image_to_video_clip(
+    image_path: str,
+    output_path: str,
+    duration: float,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    ken_burns: bool = True,
+    zoom: float = _KEN_BURNS_ZOOM,
+    threads: int = 2,
+) -> str:
+    """Render a single image into a target-aspect MP4 of ``duration`` seconds."""
+    aspect = VideoAspect(video_aspect)
+    video_width, video_height = aspect.to_resolution()
+    duration = max(0.5, float(duration))
+    cleaned_path = _cover_crop_image(image_path, (video_width, video_height))
+    clip = None
+    composite = None
+    try:
+        clip = ImageClip(cleaned_path).with_duration(duration)
+        if ken_burns and zoom > 0:
+            zoomed = clip.resized(lambda t: 1 + zoom * (t / duration)).with_position(
+                "center"
+            )
+            composite = CompositeVideoClip(
+                [zoomed], size=(video_width, video_height)
+            ).with_duration(duration)
+            render_clip = composite
+        else:
+            render_clip = clip
+        _write_videofile_with_codec_fallback(
+            render_clip,
+            output_path,
+            codec=_get_configured_video_codec(),
+            fps=fps,
+            logger=None,
+            threads=threads or 2,
+        )
+    finally:
+        close_clip(composite)
+        close_clip(clip)
+        delete_files(cleaned_path)
+    return output_path
+
+
+def video_to_normalized_clip(
+    video_path: str,
+    output_path: str,
+    duration: float,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    threads: int = 2,
+) -> str:
+    """Scale/letterbox a video to the target aspect and fit it to ``duration``
+    (looping if shorter, trimming if longer). Used for mixed-media timelines."""
+    aspect = VideoAspect(video_aspect)
+    video_width, video_height = aspect.to_resolution()
+    duration = max(0.5, float(duration))
+    source = None
+    fitted = None
+    try:
+        source = _open_video_clip_quietly(video_path)
+        clip_w, clip_h = source.size
+        if source.duration < duration:
+            source = source.with_effects([vfx.Loop(duration=duration)])
+        clip = source.subclipped(0, min(duration, source.duration))
+        if clip.duration < duration:
+            # Fallback loop via concatenation-free tiling using freeze of frames.
+            clip = clip.with_duration(duration)
+        if clip_w != video_width or clip_h != video_height:
+            scale = min(video_width / clip_w, video_height / clip_h)
+            new_w, new_h = int(clip_w * scale), int(clip_h * scale)
+            background = ColorClip(
+                size=(video_width, video_height), color=(0, 0, 0)
+            ).with_duration(clip.duration)
+            resized = clip.resized(new_size=(new_w, new_h)).with_position("center")
+            fitted = CompositeVideoClip([background, resized]).with_duration(clip.duration)
+            render_clip = fitted
+        else:
+            render_clip = clip
+        _write_videofile_with_codec_fallback(
+            render_clip,
+            output_path,
+            codec=_get_configured_video_codec(),
+            fps=fps,
+            logger=None,
+            threads=threads or 2,
+        )
+    finally:
+        close_clip(fitted)
+        close_clip(source)
+    return output_path
+
+
+def combine_article_clips(
+    clip_paths: List[str],
+    output_file: str,
+    audio_duration: float,
+    threads: int = 2,
+) -> str:
+    """Concatenate ordered, already-normalized per-scene MP4s into one clip.
+
+    The scenes are kept in narrative order (no shuffling, no re-slicing), and the
+    result is trimmed to the narration length. Beat durations are computed by the
+    caller so the timeline already covers the voice-over."""
+    if not clip_paths:
+        raise ValueError("no article clips to combine")
+    output_dir = os.path.dirname(output_file) or "."
+    concat_video_clips_with_ffmpeg(
+        clip_files=clip_paths,
+        output_file=output_file,
+        threads=threads,
+        output_dir=output_dir,
+        max_duration=audio_duration if audio_duration and audio_duration > 0 else None,
+    )
+    return output_file
+
+
+def color_background_clip(
+    output_path: str,
+    duration: float,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    color: tuple[int, int, int] = (15, 15, 20),
+    threads: int = 2,
+) -> str:
+    """Render a solid-color background MP4. Used as the last-resort visual when
+    no suitable stock asset is found for a scene, so a scene never blocks the
+    whole render."""
+    aspect = VideoAspect(video_aspect)
+    video_width, video_height = aspect.to_resolution()
+    clip = ColorClip(size=(video_width, video_height), color=color).with_duration(
+        max(0.5, float(duration))
+    )
+    try:
+        _write_videofile_with_codec_fallback(
+            clip,
+            output_path,
+            codec=_get_configured_video_codec(),
+            fps=fps,
+            logger=None,
+            threads=threads or 2,
+        )
+    finally:
+        close_clip(clip)
+    return output_path
 
 
 def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
