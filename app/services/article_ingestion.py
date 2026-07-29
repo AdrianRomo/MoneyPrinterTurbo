@@ -63,7 +63,7 @@ _TRACKING_PARAMS = {
     "recirc", "taid", "__twitter_impression",
 }
 _USER_AGENT = (
-    "Mozilla/5.0 (compatible; MoneyPrinterTurbo Article Mode/1.0; +automation)"
+    "Mozilla/5.0 (compatible; Influencer-Automation 2.0 Article Mode/1.0; +automation)"
 )
 # Common syndication/wire markers used to tag likely wire copy.
 _WIRE_MARKERS = ("(reuters)", "(ap)", "associated press", "agence france-presse", "(afp)")

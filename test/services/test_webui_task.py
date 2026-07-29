@@ -180,6 +180,44 @@ def test_generation_log_fragment_refreshes_within_half_a_second():
     )
 
 
+def test_task_history_uses_browser_download_instead_of_host_folder_open():
+    """历史任务行必须下载远端生成文件，不能打开 WebUI 服务端目录。"""
+    tree = ast.parse(WEBUI_MAIN.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_render_task_table"
+    )
+    calls = {
+        _attribute_name(node.func)
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+    }
+
+    assert "_render_task_video_download_button" in calls
+    assert "_open_task_path" not in calls
+    assert "_open_task_video" not in calls
+
+
+def test_completed_generation_result_no_longer_opens_host_folder():
+    """生成完成后页面只渲染预览和下载入口，不弹出服务端文件夹。"""
+    tree = ast.parse(WEBUI_MAIN.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_render_generation_task_snapshot"
+    )
+    calls = {
+        _attribute_name(node.func)
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+    }
+
+    assert "_render_task_video_download_button" in calls
+    assert "open_task_folder" not in calls
+
+
 def test_generation_submit_skips_duplicate_config_save():
     """
     提交任务后不能在页面末尾再次等待配置锁。

@@ -6,8 +6,8 @@ export PYTHONPATH="$CURRENT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 # 0.0.0.0 只能表示“监听所有网卡”，不适合作为浏览器访问地址。
 # macOS/Linux 下浏览器打开 http://0.0.0.0:8501 可能会经过代理或网关，
 # 最终出现 502。默认绑定并打开 127.0.0.1，与 Windows 启动脚本保持一致。
-MPT_WEBUI_HOST="${MPT_WEBUI_HOST:-127.0.0.1}"
-MPT_WEBUI_PORT="${MPT_WEBUI_PORT:-8501}"
+IA2_WEBUI_HOST="${IA2_WEBUI_HOST:-${MPT_WEBUI_HOST:-127.0.0.1}}"
+IA2_WEBUI_PORT="${IA2_WEBUI_PORT:-${MPT_WEBUI_PORT:-8501}}"
 
 if [ -x "$CURRENT_DIR/.venv/bin/python" ]; then
   PORT_CHECK_CMD="$CURRENT_DIR/.venv/bin/python"
@@ -25,7 +25,7 @@ else
 fi
 
 find_available_port() {
-  WEBUI_HOST="$MPT_WEBUI_HOST" WEBUI_PORT="$MPT_WEBUI_PORT" "$@" - <<'PY' 2>/dev/null
+  WEBUI_HOST="$IA2_WEBUI_HOST" WEBUI_PORT="$IA2_WEBUI_PORT" "$@" - <<'PY' 2>/dev/null
 import os
 import socket
 import sys
@@ -52,21 +52,21 @@ PY
 SELECTED_WEBUI_PORT=$(find_available_port $PORT_CHECK_CMD)
 
 if [ -z "$SELECTED_WEBUI_PORT" ]; then
-  echo "***** No available WebUI port found in 8501-8599 for $MPT_WEBUI_HOST. *****"
+  echo "***** No available WebUI port found in 8501-8599 for $IA2_WEBUI_HOST. *****"
   exit 1
 fi
 
-if [ "$SELECTED_WEBUI_PORT" != "$MPT_WEBUI_PORT" ]; then
-  echo "***** Port $MPT_WEBUI_PORT is unavailable, using $SELECTED_WEBUI_PORT instead. *****"
+if [ "$SELECTED_WEBUI_PORT" != "$IA2_WEBUI_PORT" ]; then
+  echo "***** Port $IA2_WEBUI_PORT is unavailable, using $SELECTED_WEBUI_PORT instead. *****"
 fi
 
-MPT_WEBUI_PORT="$SELECTED_WEBUI_PORT"
+IA2_WEBUI_PORT="$SELECTED_WEBUI_PORT"
 
-echo "***** WebUI address: http://$MPT_WEBUI_HOST:$MPT_WEBUI_PORT *****"
+echo "***** WebUI address: http://$IA2_WEBUI_HOST:$IA2_WEBUI_PORT *****"
 "$@" run "$CURRENT_DIR/webui/Main.py" \
-  --server.address="$MPT_WEBUI_HOST" \
-  --server.port="$MPT_WEBUI_PORT" \
-  --browser.serverAddress="$MPT_WEBUI_HOST" \
+  --server.address="$IA2_WEBUI_HOST" \
+  --server.port="$IA2_WEBUI_PORT" \
+  --browser.serverAddress="$IA2_WEBUI_HOST" \
   --browser.gatherUsageStats=False \
   --client.toolbarMode=minimal \
   --logger.hideWelcomeMessage=True \

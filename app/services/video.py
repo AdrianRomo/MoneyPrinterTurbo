@@ -1485,7 +1485,7 @@ def generate_video(
     logger.info(f"  ③ subtitle: {subtitle_path}")
     logger.info(f"  ④ output: {output_file}")
 
-    # https://github.com/harry0703/MoneyPrinterTurbo/issues/217
+    # https://github.com/AdrianRomo/Influencer-Automation-2.0/issues/217
     # PermissionError: [WinError 32] The process cannot access the file because it is being used by another process: 'final-1.mp4.tempTEMP_MPY_wvf_snd.mp3'
     # write into the same directory as the output file
     output_dir = os.path.dirname(output_file)

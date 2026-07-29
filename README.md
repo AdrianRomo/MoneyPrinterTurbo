@@ -1,20 +1,20 @@
 <div align="center">
 
-# MoneyPrinterTurbo 💸
+# Influencer-Automation 2.0
 
 ### 一站式 AI 短视频生成工具
 
 只需提供视频<b>主题</b>或<b>关键词</b>，即可自动生成视频脚本、匹配素材、生成字幕和背景音乐，并合成高清短视频。
 
-[![Version](https://img.shields.io/github/v/release/harry0703/MoneyPrinterTurbo?color=blue&label=version)](https://github.com/harry0703/MoneyPrinterTurbo/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/harry0703/MoneyPrinterTurbo/releases/latest)
+[![Version](https://img.shields.io/github/v/release/AdrianRomo/Influencer-Automation-2.0?color=blue&label=version)](https://github.com/AdrianRomo/Influencer-Automation-2.0/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/AdrianRomo/Influencer-Automation-2.0/releases/latest)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Downloads](https://img.shields.io/github/downloads/harry0703/MoneyPrinterTurbo/total)](https://github.com/harry0703/MoneyPrinterTurbo/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/AdrianRomo/Influencer-Automation-2.0/total)](https://github.com/AdrianRomo/Influencer-Automation-2.0/releases/latest)
 
-<a href="https://trendshift.io/repositories/8731" target="_blank"><img src="https://trendshift.io/api/badge/repositories/8731" alt="harry0703%2FMoneyPrinterTurbo | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-<a href="https://www.star-history.com/harry0703/moneyprinterturbo"><img src="https://api.star-history.com/badge?repo=harry0703/MoneyPrinterTurbo" alt="Star History Rank" style="height: 55px;" height="55"/></a>
+<a href="https://trendshift.io/repositories/8731" target="_blank"><img src="https://trendshift.io/api/badge/repositories/8731" alt="AdrianRomo%2FInfluencer-Automation-2.0 | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+<a href="https://www.star-history.com/AdrianRomo/influencer-automation-2.0"><img src="https://api.star-history.com/badge?repo=AdrianRomo/Influencer-Automation-2.0" alt="Star History Rank" style="height: 55px;" height="55"/></a>
 
-简体中文 | [English](README-en.md) | [版本发布](https://github.com/harry0703/MoneyPrinterTurbo/releases) | [问题反馈](https://github.com/harry0703/MoneyPrinterTurbo/issues)
+简体中文 | [English](README-en.md) | [版本发布](https://github.com/AdrianRomo/Influencer-Automation-2.0/releases) | [问题反馈](https://github.com/AdrianRomo/Influencer-Automation-2.0/issues)
 
 </div>
 
@@ -31,22 +31,22 @@
 ## 特别感谢 ❤️
 
 <div align="center">
-  <a href="https://platform.kimi.com/?aff=MoneyPrinterTurbo" target="_blank"><img src="https://gcdn.moonshot.cn/growth-cdn/sponsor/kimi-zh.png" alt="Kimi 赞助 MoneyPrinterTurbo" width="100%"></a>
+  <a href="https://platform.kimi.com/?aff=Influencer-Automation-2.0" target="_blank"><img src="https://gcdn.moonshot.cn/growth-cdn/sponsor/kimi-zh.png" alt="Kimi 赞助 Influencer-Automation 2.0" width="100%"></a>
 </div>
 
-感谢 [Kimi](https://platform.kimi.com/?aff=MoneyPrinterTurbo) 赞助本项目！[Kimi K3](https://www.kimi.com/blog/kimi-k3?aff=MoneyPrinterTurbo) 是 Moonshot AI 迄今能力最强的模型，也是全球首个开源 3T 级模型，拥有原生视觉能力与 100 万 Token 上下文，在知识工作、推理和长周期任务中展现前沿性能。在 MoneyPrinterTurbo 中，K3 能直接驱动视频创作，不仅撰写视频文案，还会提炼素材搜索关键词、决定成片画面；对内容理解越准确，匹配到的素材就越贴题。
+感谢 [Kimi](https://platform.kimi.com/?aff=Influencer-Automation-2.0) 赞助本项目！[Kimi K3](https://www.kimi.com/blog/kimi-k3?aff=Influencer-Automation-2.0) 是 Moonshot AI 迄今能力最强的模型，也是全球首个开源 3T 级模型，拥有原生视觉能力与 100 万 Token 上下文，在知识工作、推理和长周期任务中展现前沿性能。在 Influencer-Automation 2.0 中，K3 能直接驱动视频创作，不仅撰写视频文案，还会提炼素材搜索关键词、决定成片画面；对内容理解越准确，匹配到的素材就越贴题。
 
-**MoneyPrinterTurbo 已接入 Kimi。前往 Kimi 开放平台（[中文站](https://platform.kimi.com/?aff=MoneyPrinterTurbo)｜[Global](https://platform.kimi.ai/?aff=MoneyPrinterTurbo)）体验 API，或了解 [Kimi Code 订阅](https://www.kimi.com/code?aff=MoneyPrinterTurbo)。**
+**Influencer-Automation 2.0 已接入 Kimi。前往 Kimi 开放平台（[中文站](https://platform.kimi.com/?aff=Influencer-Automation-2.0)｜[Global](https://platform.kimi.ai/?aff=Influencer-Automation-2.0)）体验 API，或了解 [Kimi Code 订阅](https://www.kimi.com/code?aff=Influencer-Automation-2.0)。**
 <br>
 
 <table align="center">
   <tr>
     <td align="center" width="120">
-      <a href="https://www.volcengine.com/activity/ai618?utm_campaign=hw&utm_content=hw&utm_medium=devrel_tool_web&utm_source=OWO&utm_term=MoneyPrinterTurbo"><img src="docs/sponsors/volcengine-logo.svg" alt="火山引擎" height="32"></a><br>
-      <a href="https://www.volcengine.com/activity/ai618?utm_campaign=hw&utm_content=hw&utm_medium=devrel_tool_web&utm_source=OWO&utm_term=MoneyPrinterTurbo"><strong>火山引擎</strong></a>
+      <a href="https://www.volcengine.com/activity/ai618?utm_campaign=hw&utm_content=hw&utm_medium=devrel_tool_web&utm_source=OWO&utm_term=Influencer-Automation-2.0"><img src="docs/sponsors/volcengine-logo.svg" alt="火山引擎" height="32"></a><br>
+      <a href="https://www.volcengine.com/activity/ai618?utm_campaign=hw&utm_content=hw&utm_medium=devrel_tool_web&utm_source=OWO&utm_term=Influencer-Automation-2.0"><strong>火山引擎</strong></a>
     </td>
     <td align="left">
-      感谢字节火山引擎赞助本项目！ <strong>【专属活动优惠】</strong>19元Tokens包！享字节自研豆包模型+满血版开源 SOTA模型，覆盖文本、VLM、图像生成，全模态一站配齐：Seed-2.1、Seedream-5.0、GLM-5.2、DeepSeek、Qwen等。不止编程，更能解决 Agent 复杂长程任务 --&gt; <a href="https://www.volcengine.com/activity/ai618?utm_campaign=hw&utm_content=hw&utm_medium=devrel_tool_web&utm_source=OWO&utm_term=MoneyPrinterTurbo">注册即领2500万Tokens，立即前往</a>
+      感谢字节火山引擎赞助本项目！ <strong>【专属活动优惠】</strong>19元Tokens包！享字节自研豆包模型+满血版开源 SOTA模型，覆盖文本、VLM、图像生成，全模态一站配齐：Seed-2.1、Seedream-5.0、GLM-5.2、DeepSeek、Qwen等。不止编程，更能解决 Agent 复杂长程任务 --&gt; <a href="https://www.volcengine.com/activity/ai618?utm_campaign=hw&utm_content=hw&utm_medium=devrel_tool_web&utm_source=OWO&utm_term=Influencer-Automation-2.0">注册即领2500万Tokens，立即前往</a>
     </td>
   </tr>
   <tr>
@@ -78,11 +78,11 @@
   </tr>
   <tr>
     <td align="center" width="120">
-      <a href="https://ergouapi.com/r/gh-moneyprinterturbo"><img src="docs/sponsors/ergou-api-logo.png" alt="二狗 API" height="56"></a><br>
-      <a href="https://ergouapi.com/r/gh-moneyprinterturbo"><strong>二狗 API</strong></a>
+      <a href="https://ergouapi.com/r/gh-influencer-automation-2.0"><img src="docs/sponsors/ergou-api-logo.png" alt="二狗 API" height="56"></a><br>
+      <a href="https://ergouapi.com/r/gh-influencer-automation-2.0"><strong>二狗 API</strong></a>
     </td>
     <td align="left">
-      感谢 <a href="https://ergouapi.com/r/gh-moneyprinterturbo">二狗 API</a> 赞助本项目！接入二狗，稳如老狗。二狗 API 中转站，全站 0.1x~0.2x 超低倍率，提供 Claude / GPT / Gemini 等多个国内外 100% 纯血大模型接口。顶级 IPLC 线路 + 住宅双 ISP 冗余，确保全国范围稳定低延迟访问。欢迎各位开发者、工作室 <a href="https://ergouapi.com/r/gh-moneyprinterturbo">注册使用</a>。
+      感谢 <a href="https://ergouapi.com/r/gh-influencer-automation-2.0">二狗 API</a> 赞助本项目！接入二狗，稳如老狗。二狗 API 中转站，全站 0.1x~0.2x 超低倍率，提供 Claude / GPT / Gemini 等多个国内外 100% 纯血大模型接口。顶级 IPLC 线路 + 住宅双 ISP 冗余，确保全国范围稳定低延迟访问。欢迎各位开发者、工作室 <a href="https://ergouapi.com/r/gh-influencer-automation-2.0">注册使用</a>。
     </td>
   </tr>
   <tr>
@@ -125,7 +125,7 @@
 
 ## 作品展示 🎬
 
-以下示例均由 MoneyPrinterTurbo 实际生成。
+以下示例均由 Influencer-Automation 2.0 实际生成。
 
 ### 竖屏 9:16
 
@@ -190,21 +190,21 @@
 如果你的 AI Agent 支持读取 Skill 文档并操作本地终端，可以直接发送下面这段话。Agent 会自动完成安装、配置和视频生成；只有缺少必要的 API Key 时才会向你询问，完成后会返回生成的视频文件路径。目前支持 macOS 和 Windows。
 
 ```text
-使用这个 Skill：https://raw.githubusercontent.com/harry0703/MoneyPrinterTurbo/main/docs/skill/SKILL.md
+使用这个 Skill：https://raw.githubusercontent.com/AdrianRomo/Influencer-Automation-2.0/main/docs/skill/SKILL.md
 帮我生成一个主题为“人工智能如何改变普通人的日常生活”的视频。
 ```
 
 ### 在 Google Colab 中运行
 
-免去本地环境配置，点击直接在 Google Colab 中快速体验 MoneyPrinterTurbo
+免去本地环境配置，点击直接在 Google Colab 中快速体验 Influencer-Automation 2.0
 
-[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/harry0703/MoneyPrinterTurbo/blob/main/docs/MoneyPrinterTurbo.ipynb)
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AdrianRomo/Influencer-Automation-2.0/blob/main/docs/influencer-automation-2.0.ipynb)
 
 ### Windows 一键启动包
 
 下载一键启动包，解压直接使用（路径不要有 **中文**、**特殊字符**、**空格**）
 
-- GitHub Releases：https://github.com/harry0703/MoneyPrinterTurbo/releases/latest
+- GitHub Releases：https://github.com/AdrianRomo/Influencer-Automation-2.0/releases/latest
 
 下载后，建议先**双击执行** `update.bat` 更新到**最新代码**，然后双击 `start.bat` 启动
 
@@ -220,7 +220,7 @@
 #### ① 克隆代码
 
 ```shell
-git clone https://github.com/harry0703/MoneyPrinterTurbo.git
+git clone https://github.com/AdrianRomo/Influencer-Automation-2.0.git
 ```
 
 #### ② 配置项目（可选）
@@ -239,11 +239,11 @@ Windows 用户可以参考微软的文档：
 2. https://learn.microsoft.com/zh-cn/windows/wsl/tutorials/wsl-containers
 
 ```shell
-cd MoneyPrinterTurbo
+cd Influencer-Automation-2.0
 docker compose -f docker-compose.release.yml up
 ```
 
-> 默认推荐使用 `docker-compose.release.yml`，它会直接拉取 GitHub Container Registry 上的预构建镜像：`ghcr.io/harry0703/moneyprinterturbo:latest`。
+> 默认推荐使用 `docker-compose.release.yml`，它会直接拉取 GitHub Container Registry 上的预构建镜像：`ghcr.io/adrianromo/influencer-automation-2.0:latest`。
 > 如果你需要本地重新构建镜像，可以继续使用 `docker compose up`。
 > 首次启动前，请将 `config.example.toml` 复制为 `config.toml`，供容器挂载使用。
 > Docker compose 文件默认将端口绑定到 `127.0.0.1`。如果远端反向代理需要通过局域网访问这台主机，请将 `WEBUI_HOST_BIND` 设置为主机的局域网地址，例如：
@@ -274,8 +274,8 @@ docker compose -f docker-compose.release.yml up
 推荐使用 [uv](https://docs.astral.sh/uv/) 管理 Python 环境和依赖。项目支持 Python 3.11 或更高版本，以下示例使用 Python 3.11。
 
 ```shell
-git clone https://github.com/harry0703/MoneyPrinterTurbo.git
-cd MoneyPrinterTurbo
+git clone https://github.com/AdrianRomo/Influencer-Automation-2.0.git
+cd Influencer-Automation-2.0
 uv python install 3.11
 uv sync --frozen
 ```
@@ -296,7 +296,7 @@ pip install -r requirements.txt
 
 #### ② 启动 WebUI 🌐
 
-注意需要到 MoneyPrinterTurbo 项目 `根目录` 下执行以下命令
+注意需要到 Influencer-Automation 2.0 项目 `根目录` 下执行以下命令
 
 ###### Windows
 
@@ -306,7 +306,7 @@ pip install -r requirements.txt
 
 在 CMD 中也可以执行 `webui.bat`。
 `webui.bat` 会优先使用项目 `.venv` 或一键包内置 Python；如果没有找到项目 Python，但已安装 `uv`，会自动切换为 `uv run streamlit`。
-如需允许局域网内其他设备访问 WebUI，可以先执行 `set MPT_WEBUI_HOST=0.0.0.0`，再运行 `webui.bat`。
+如需允许局域网内其他设备访问 WebUI，可以先执行 `set IA2_WEBUI_HOST=0.0.0.0`，再运行 `webui.bat`。
 
 ###### macOS 或 Linux
 
@@ -317,7 +317,7 @@ sh webui.sh
 脚本会自动使用项目虚拟环境或 `uv`，并选择可用的本地端口。如需允许局域网内其他设备访问，可以执行：
 
 ```shell
-MPT_WEBUI_HOST=0.0.0.0 sh webui.sh
+IA2_WEBUI_HOST=0.0.0.0 sh webui.sh
 ```
 
 启动后，会自动打开浏览器（如果打开是空白，建议换成 **Chrome** 或者 **Edge** 打开）
@@ -373,10 +373,10 @@ model_size = "large-v3-turbo"
 
 > 首次使用 Whisper 时，程序会自动从 Hugging Face 下载模型。如果当前网络无法自动下载，可以从 [Hugging Face](https://huggingface.co/Systran/faster-whisper-large-v3) 手动下载 `whisper-large-v3`。
 
-下载并解压后，将整个目录放到 `.\MoneyPrinterTurbo\models`，最终路径应为 `.\MoneyPrinterTurbo\models\whisper-large-v3`：
+下载并解压后，将整个目录放到 `.\Influencer-Automation-2.0\models`，最终路径应为 `.\Influencer-Automation-2.0\models\whisper-large-v3`：
 
 ```
-MoneyPrinterTurbo
+Influencer-Automation 2.0
   ├─models
   │   └─whisper-large-v3
   │          config.json
@@ -481,7 +481,7 @@ Trying to load the model directly from the local cache, if it exists.
 
 ## 反馈建议 📢
 
-- 可以提交 [issue](https://github.com/harry0703/MoneyPrinterTurbo/issues) 或者 [pull request](https://github.com/harry0703/MoneyPrinterTurbo/pulls)。
+- 可以提交 [issue](https://github.com/AdrianRomo/Influencer-Automation-2.0/issues) 或者 [pull request](https://github.com/AdrianRomo/Influencer-Automation-2.0/pulls)。
 
 ## 许可证 📝
 
@@ -489,10 +489,10 @@ Trying to load the model directly from the local cache, if it exists.
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=harry0703%2FMoneyPrinterTurbo&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=AdrianRomo%2FInfluencer-Automation-2.0&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=harry0703/MoneyPrinterTurbo&type=date&theme=dark&legend=top-left&sealed_token=AtOR8By6GcNKd46eJLixrnucHF_99GOSBBKfc60pAm2xsDylemaYxDMcvTlPRz-G_onzDrs-hDrM0xdKkn0L6PgDin3fv02ViVtsZvgRYgk0YOzkX2KgLG8wro66VGphii-u6GNpzD8JocrqGGKvsFSpmbRqo5g-2mEDaN7-ESdtF48ZH0rDOCpoc1Mh" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=harry0703/MoneyPrinterTurbo&type=date&legend=top-left&sealed_token=AtOR8By6GcNKd46eJLixrnucHF_99GOSBBKfc60pAm2xsDylemaYxDMcvTlPRz-G_onzDrs-hDrM0xdKkn0L6PgDin3fv02ViVtsZvgRYgk0YOzkX2KgLG8wro66VGphii-u6GNpzD8JocrqGGKvsFSpmbRqo5g-2mEDaN7-ESdtF48ZH0rDOCpoc1Mh" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=harry0703/MoneyPrinterTurbo&type=date&legend=top-left&sealed_token=AtOR8By6GcNKd46eJLixrnucHF_99GOSBBKfc60pAm2xsDylemaYxDMcvTlPRz-G_onzDrs-hDrM0xdKkn0L6PgDin3fv02ViVtsZvgRYgk0YOzkX2KgLG8wro66VGphii-u6GNpzD8JocrqGGKvsFSpmbRqo5g-2mEDaN7-ESdtF48ZH0rDOCpoc1Mh" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=AdrianRomo/Influencer-Automation-2.0&type=date&theme=dark&legend=top-left&sealed_token=AtOR8By6GcNKd46eJLixrnucHF_99GOSBBKfc60pAm2xsDylemaYxDMcvTlPRz-G_onzDrs-hDrM0xdKkn0L6PgDin3fv02ViVtsZvgRYgk0YOzkX2KgLG8wro66VGphii-u6GNpzD8JocrqGGKvsFSpmbRqo5g-2mEDaN7-ESdtF48ZH0rDOCpoc1Mh" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=AdrianRomo/Influencer-Automation-2.0&type=date&legend=top-left&sealed_token=AtOR8By6GcNKd46eJLixrnucHF_99GOSBBKfc60pAm2xsDylemaYxDMcvTlPRz-G_onzDrs-hDrM0xdKkn0L6PgDin3fv02ViVtsZvgRYgk0YOzkX2KgLG8wro66VGphii-u6GNpzD8JocrqGGKvsFSpmbRqo5g-2mEDaN7-ESdtF48ZH0rDOCpoc1Mh" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=AdrianRomo/Influencer-Automation-2.0&type=date&legend=top-left&sealed_token=AtOR8By6GcNKd46eJLixrnucHF_99GOSBBKfc60pAm2xsDylemaYxDMcvTlPRz-G_onzDrs-hDrM0xdKkn0L6PgDin3fv02ViVtsZvgRYgk0YOzkX2KgLG8wro66VGphii-u6GNpzD8JocrqGGKvsFSpmbRqo5g-2mEDaN7-ESdtF48ZH0rDOCpoc1Mh" />
  </picture>
 </a>

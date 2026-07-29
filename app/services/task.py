@@ -36,7 +36,7 @@ from app.utils import file_security, utils
 # 立即进入完成状态。
 _cross_post_executor = ThreadPoolExecutor(
     max_workers=2,
-    thread_name_prefix="mpt-cross-post",
+    thread_name_prefix="ia2-cross-post",
 )
 _cross_post_max_pending_tasks = max(
     1,
@@ -787,7 +787,7 @@ def generate_final_videos(
         futures = []
         with ThreadPoolExecutor(
             max_workers=parallelism,
-            thread_name_prefix="mpt-video-output",
+            thread_name_prefix="ia2-video-output",
         ) as executor:
             futures = [
                 executor.submit(_render_one, index)

@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE_NAME: ghcr.io/harry0703/moneyprinterturbo
+  IMAGE_NAME: ghcr.io/adrianromo/influencer-automation-2.0
 
 jobs:
   publish:

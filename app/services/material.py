@@ -1220,7 +1220,7 @@ def search_images_pexels(
 ) -> List[MediaAsset]:
     aspect = VideoAspect(video_aspect)
     api_key = get_api_key("pexels_api_keys")
-    headers = {"Authorization": api_key, "User-Agent": "MoneyPrinterTurbo/ArticleMode"}
+    headers = {"Authorization": api_key, "User-Agent": "Influencer-Automation-2.0/ArticleMode"}
     params = {
         "query": search_term,
         "per_page": per_page,
@@ -1440,7 +1440,7 @@ def save_image(image_url: str, save_dir: str = "") -> str:
                 os.remove(image_path)
             except OSError:
                 pass
-    headers = {"User-Agent": "Mozilla/5.0 MoneyPrinterTurbo/ArticleMode"}
+    headers = {"User-Agent": "Mozilla/5.0 Influencer-Automation-2.0/ArticleMode"}
     try:
         with requests.get(
             image_url, headers=headers, proxies=config.proxy,

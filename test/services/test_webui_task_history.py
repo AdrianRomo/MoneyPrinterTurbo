@@ -3,12 +3,19 @@ import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from app.utils import file_security, utils
 
 
 ROOT_DIR = Path(__file__).parent.parent.parent
 WEBUI_MAIN = ROOT_DIR / "webui" / "Main.py"
 TASK_HISTORY_HELPERS = {
+    "_as_task_video_list",
     "_find_final_task_video",
+    "_resolve_task_video_file",
+    "_task_video_download_name",
+    "_task_video_mime_type",
     "_build_restore_upload_requirements",
     "_get_unmet_restore_upload_requirements",
 }
@@ -38,7 +45,16 @@ def _load_task_history_helpers():
         elif isinstance(node, ast.FunctionDef) and node.name in TASK_HISTORY_HELPERS:
             selected_nodes.append(node)
 
-    namespace = {"os": os, "re": re, "Mapping": Mapping}
+    namespace = {
+        "file_security": file_security,
+        "logger": MagicMock(),
+        "mimetypes": __import__("mimetypes"),
+        "os": os,
+        "Path": Path,
+        "re": re,
+        "Mapping": Mapping,
+        "utils": utils,
+    }
     module = ast.fix_missing_locations(ast.Module(body=selected_nodes, type_ignores=[]))
     exec(compile(module, str(WEBUI_MAIN), "exec"), namespace)
     return namespace
@@ -52,6 +68,10 @@ build_restore_upload_requirements = TASK_HISTORY_NAMESPACE[
 get_unmet_restore_upload_requirements = TASK_HISTORY_NAMESPACE[
     "_get_unmet_restore_upload_requirements"
 ]
+as_task_video_list = TASK_HISTORY_NAMESPACE["_as_task_video_list"]
+resolve_task_video_file = TASK_HISTORY_NAMESPACE["_resolve_task_video_file"]
+task_video_download_name = TASK_HISTORY_NAMESPACE["_task_video_download_name"]
+task_video_mime_type = TASK_HISTORY_NAMESPACE["_task_video_mime_type"]
 
 
 def test_find_final_task_video_ignores_intermediate_files(tmp_path):
@@ -73,6 +93,39 @@ def test_find_final_task_video_returns_first_numbered_output(tmp_path):
     (tmp_path / "final-1.mp4").touch()
 
     assert find_final_task_video(str(tmp_path)) == str(tmp_path / "final-1.mp4")
+
+
+def test_task_video_list_accepts_legacy_string_state():
+    """历史任务兼容 Redis 或旧状态里偶发保存成字符串的视频字段。"""
+    assert as_task_video_list("final.mp4") == ["final.mp4"]
+    assert as_task_video_list(["final-1.mp4", 1, "", "final-2.mp4"]) == [
+        "final-1.mp4",
+        "final-2.mp4",
+    ]
+    assert as_task_video_list(None) == []
+
+
+def test_resolve_task_video_file_rejects_paths_outside_task_dir(tmp_path):
+    """下载按钮只能暴露 storage/tasks 下真实存在的任务视频。"""
+    task_dir = tmp_path / "tasks"
+    task_dir.mkdir()
+    video_file = task_dir / "task-1" / "final-1.mp4"
+    video_file.parent.mkdir()
+    video_file.write_bytes(b"video")
+    secret_file = tmp_path / "secret.mp4"
+    secret_file.write_bytes(b"secret")
+
+    with patch.object(utils, "task_dir", return_value=str(task_dir)):
+        assert resolve_task_video_file(str(video_file)) == os.path.realpath(video_file)
+        assert resolve_task_video_file("../secret.mp4") == ""
+
+
+def test_task_video_download_name_and_mime_are_browser_friendly():
+    """下载文件名保留任务来源，但去掉路径分隔符和空白等不稳定字符。"""
+    assert task_video_download_name("task 1/../x", "/tmp/final 1.mp4") == (
+        "task-1-..-x-final-1.mp4"
+    )
+    assert task_video_mime_type("/tmp/final-1.mp4") == "video/mp4"
 
 
 def test_restore_requirements_block_missing_uploaded_files():

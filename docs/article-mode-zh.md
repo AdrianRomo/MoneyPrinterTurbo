@@ -58,8 +58,8 @@ python -m app.services.article_worker --once
 建议在预发环境使用独立配置与存储目录，避免影响生产数据库：
 
 ```bash
-MPT_CONFIG_FILE=/tmp/mpt-article-config.toml \
-MPT_STORAGE_DIR=/tmp/mpt-article-storage \
+IA2_CONFIG_FILE=/tmp/ia2-article-config.toml \
+IA2_STORAGE_DIR=/tmp/ia2-article-storage \
 python -m app.services.article_worker --once --automated
 ```
 

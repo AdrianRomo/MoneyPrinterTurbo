@@ -2,12 +2,12 @@
 FROM python:3.11-slim-bullseye
 
 # Set the working directory in the container
-WORKDIR /MoneyPrinterTurbo
+WORKDIR /influencer-automation-2.0
 
-# 设置/MoneyPrinterTurbo目录权限为777
-RUN chmod 777 /MoneyPrinterTurbo
+# 设置/influencer-automation-2.0目录权限为777
+RUN chmod 777 /influencer-automation-2.0
 
-ENV PYTHONPATH="/MoneyPrinterTurbo"
+ENV PYTHONPATH="/influencer-automation-2.0"
 
 # Install system dependencies with retry logic (official Debian mirrors)
 RUN ( \
@@ -38,10 +38,10 @@ EXPOSE 8501
 CMD ["streamlit", "run", "./webui/Main.py", "--server.address=0.0.0.0", "--server.port=8501", "--browser.serverAddress=127.0.0.1", "--server.enableCORS=True", "--browser.gatherUsageStats=False", "--client.toolbarMode=minimal", "--logger.hideWelcomeMessage=True", "--server.showEmailPrompt=False"]
 
 # 1. Build the Docker image using the following command
-# docker build -t moneyprinterturbo .
+# docker build -t influencer-automation-2.0 .
 
 # 2. Run the Docker container using the following command
 ## For Linux or MacOS:
-# docker run -v $(pwd)/config.toml:/MoneyPrinterTurbo/config.toml -v $(pwd)/storage:/MoneyPrinterTurbo/storage -p 127.0.0.1:8501:8501 moneyprinterturbo
+# docker run -v $(pwd)/config.toml:/influencer-automation-2.0/config.toml -v $(pwd)/storage:/influencer-automation-2.0/storage -p 127.0.0.1:8501:8501 influencer-automation-2.0
 ## For Windows:
-# docker run -v ${PWD}/config.toml:/MoneyPrinterTurbo/config.toml -v ${PWD}/storage:/MoneyPrinterTurbo/storage -p 127.0.0.1:8501:8501 moneyprinterturbo
+# docker run -v ${PWD}/config.toml:/influencer-automation-2.0/config.toml -v ${PWD}/storage:/influencer-automation-2.0/storage -p 127.0.0.1:8501:8501 influencer-automation-2.0

@@ -89,8 +89,8 @@ python -m app.services.article_worker --interval 900
 For staging, use a separate config and storage root:
 
 ```bash
-MPT_CONFIG_FILE=/tmp/mpt-article-config.toml \
-MPT_STORAGE_DIR=/tmp/mpt-article-storage \
+IA2_CONFIG_FILE=/tmp/ia2-article-config.toml \
+IA2_STORAGE_DIR=/tmp/ia2-article-storage \
 python -m app.services.article_worker --once --automated
 ```
 
@@ -269,11 +269,11 @@ the same `config.toml` and `articles.db`:
 ```yaml
 services:
   article-worker:
-    image: moneyprinterturbo:latest
+    image: influencer-automation-2.0:latest
     command: ["python", "-m", "app.services.article_worker"]
     volumes:
-      - ./config.toml:/MoneyPrinterTurbo/config.toml:ro
-      - ./storage:/MoneyPrinterTurbo/storage
+      - ./config.toml:/influencer-automation-2.0/config.toml:ro
+      - ./storage:/influencer-automation-2.0/storage
     restart: unless-stopped
 ```
 

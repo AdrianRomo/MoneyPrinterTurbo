@@ -48,7 +48,7 @@ div[class*="st-key-voice_mode_control"] [role="radiogroup"] > button p {
 
 /* 顶部品牌区将项目名和弱化版本号放在同一基线。项目名称仍是页面唯一的 h1；
    版本号本身作为项目链接，避免增加独立图标而干扰标题的视觉层级。 */
-.mpt-brand {
+.ia2-brand {
     min-width: 0;
     margin: 0;
     padding: 0;
@@ -58,14 +58,14 @@ div[class*="st-key-voice_mode_control"] [role="radiogroup"] > button p {
 
 /* Streamlit 会在自定义 h1 内增加一层文本容器，实际的行内布局需要作用在
    这层容器上，才能稳定控制项目名和版本号的间距。 */
-.mpt-brand > span:first-child {
+.ia2-brand > span:first-child {
     display: flex;
     align-items: baseline;
     gap: 0.65rem;
     min-width: 0;
 }
 
-.mpt-brand__name {
+.ia2-brand__name {
     min-width: 0;
     font-size: 2.75rem;
     font-weight: 700;
@@ -73,7 +73,7 @@ div[class*="st-key-voice_mode_control"] [role="radiogroup"] > button p {
     white-space: nowrap;
 }
 
-.mpt-brand__version {
+.ia2-brand__version {
     flex: 0 0 auto;
     font-size: 1rem;
     font-weight: 600;
@@ -83,21 +83,21 @@ div[class*="st-key-voice_mode_control"] [role="radiogroup"] > button p {
     white-space: nowrap;
 }
 
-.mpt-brand__version:hover {
+.ia2-brand__version:hover {
     color: inherit !important;
     opacity: 1;
     text-decoration: underline !important;
     text-underline-offset: 0.18em;
 }
 
-.mpt-brand__version:focus-visible {
+.ia2-brand__version:focus-visible {
     outline: 2px solid rgba(255, 75, 75, 0.48);
     outline-offset: 2px;
 }
 
 /* 新版本提醒只在确有正式版本更新时出现。使用文字链接而不是按钮或横幅，
    让它保持可发现性，同时不抢占项目标题和主要操作入口的视觉层级。 */
-.mpt-brand__update {
+.ia2-brand__update {
     flex: 0 0 auto;
     font-size: 0.875rem;
     font-weight: 600;
@@ -106,25 +106,25 @@ div[class*="st-key-voice_mode_control"] [role="radiogroup"] > button p {
     white-space: nowrap;
 }
 
-.mpt-brand__update:hover {
+.ia2-brand__update:hover {
     text-decoration: underline !important;
     text-underline-offset: 0.18em;
 }
 
-.mpt-brand__update:focus-visible {
+.ia2-brand__update:focus-visible {
     outline: 2px solid rgba(255, 75, 75, 0.48);
     outline-offset: 2px;
 }
 
 @media (prefers-color-scheme: dark) {
-    .mpt-brand__update {
+    .ia2-brand__update {
         color: #ff6b6b !important;
     }
 }
 
 /* Streamlit 会自动给 h1 追加一个标题锚点。品牌区已有版本号项目链接，额外的
    标题锚点没有实际价值，因此只在这个标题内隐藏，避免窄屏出现多余图标。 */
-.mpt-brand > [data-testid="stHeaderActionElements"] {
+.ia2-brand > [data-testid="stHeaderActionElements"] {
     display: none !important;
 }
 
@@ -137,38 +137,38 @@ div[class*="st-key-voice_mode_control"] [role="radiogroup"] > button p {
 }
 
 @media (max-width: 700px) {
-    .mpt-brand > span:first-child {
+    .ia2-brand > span:first-child {
         gap: 0.45rem;
     }
 
-    .mpt-brand__name {
+    .ia2-brand__name {
         font-size: 1.875rem;
     }
 
-    .mpt-brand__version {
+    .ia2-brand__version {
         font-size: 0.875rem;
     }
 
-    .mpt-brand__update {
+    .ia2-brand__update {
         font-size: 0.75rem;
     }
 
 }
 
 @media (max-width: 480px) {
-    .mpt-brand > span:first-child {
+    .ia2-brand > span:first-child {
         gap: 0.35rem;
     }
 
-    .mpt-brand__name {
+    .ia2-brand__name {
         font-size: 1.5rem;
     }
 
-    .mpt-brand__version {
+    .ia2-brand__version {
         font-size: 0.75rem;
     }
 
-    .mpt-brand__update {
+    .ia2-brand__update {
         font-size: 0.6875rem;
     }
 
@@ -328,11 +328,11 @@ div[class*="st-key-task_row_"] button[kind="secondary"] p {
 
 /* 中等宽度下将四个设置面板调整为 2×2，避免每列过窄导致标签和按钮频繁换行。 */
 @media (min-width: 701px) and (max-width: 1100px) {
-    .mpt-brand__name {
+    .ia2-brand__name {
         font-size: 2.25rem;
     }
 
-    .mpt-brand__version {
+    .ia2-brand__version {
         font-size: 0.875rem;
     }
 

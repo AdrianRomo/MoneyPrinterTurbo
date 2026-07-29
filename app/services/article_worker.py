@@ -361,7 +361,7 @@ def run_forever(interval_seconds: int, mode_override: Optional[AutomationMode] =
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="MoneyPrinterTurbo Article Mode worker")
+    parser = argparse.ArgumentParser(description="Influencer-Automation 2.0 Article Mode worker")
     parser.add_argument("--once", action="store_true", help="run a single pass and exit")
     parser.add_argument("--autonomous", action="store_true", help="force autonomous mode")
     parser.add_argument("--automated", action="store_true", help="force automated mode")

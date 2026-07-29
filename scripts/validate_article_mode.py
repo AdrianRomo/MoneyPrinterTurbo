@@ -46,15 +46,15 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _prepare_environment(output_dir: str | None) -> Path:
-    root = Path(output_dir or tempfile.mkdtemp(prefix="mpt-article-smoke-")).resolve()
+    root = Path(output_dir or tempfile.mkdtemp(prefix="ia2-article-smoke-")).resolve()
     root.mkdir(parents=True, exist_ok=True)
     config_path = root / "config.toml"
     if not config_path.exists():
         shutil.copyfile(PROJECT_ROOT / "config.example.toml", config_path)
     storage_dir = root / "storage"
     storage_dir.mkdir(parents=True, exist_ok=True)
-    os.environ["MPT_CONFIG_FILE"] = str(config_path)
-    os.environ["MPT_STORAGE_DIR"] = str(storage_dir)
+    os.environ["IA2_CONFIG_FILE"] = str(config_path)
+    os.environ["IA2_STORAGE_DIR"] = str(storage_dir)
     return root
 
 
@@ -561,8 +561,8 @@ def main() -> int:
     summary = {
         "validation": "local_integration",
         "output_root": str(output_root),
-        "config": os.environ["MPT_CONFIG_FILE"],
-        "storage": os.environ["MPT_STORAGE_DIR"],
+        "config": os.environ["IA2_CONFIG_FILE"],
+        "storage": os.environ["IA2_STORAGE_DIR"],
         "database": str(db_path),
         "direct_url": direct,
         "rss_worker": rss,

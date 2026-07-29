@@ -6,13 +6,12 @@ import mimetypes
 import os
 import re
 import shutil
-import subprocess
 import sys
 import webbrowser
 from collections.abc import Mapping
 from datetime import date, datetime
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import requests
 import streamlit as st
@@ -20,7 +19,7 @@ from loguru import logger
 from streamlit_tour import Tour
 
 # WebUI 作为独立入口运行时，需要让项目根目录优先于第三方依赖，
-# 避免依赖中的同名 app 包遮蔽 MoneyPrinterTurbo 自己的 app 包。
+# 避免依赖中的同名 app 包遮蔽 Influencer-Automation 2.0 自己的 app 包。
 root_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 if root_dir in sys.path:
     sys.path.remove(root_dir)
@@ -50,25 +49,25 @@ from app.services import state as sm
 from app.services import task as tm
 from app.services import version_checker
 from app.utils.logging_utils import configure_terminal_logger
-from app.utils import utils
+from app.utils import file_security, utils
 
 st.set_page_config(
-    page_title="MoneyPrinterTurbo",
+    page_title="Influencer-Automation 2.0",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="auto",
     menu_items={
-        "Report a bug": "https://github.com/harry0703/MoneyPrinterTurbo/issues",
-        "About": "# MoneyPrinterTurbo\nSimply provide a topic or keyword for a video, and it will "
+        "Report a bug": "https://github.com/AdrianRomo/Influencer-Automation-2.0/issues",
+        "About": "# Influencer-Automation 2.0\nSimply provide a topic or keyword for a video, and it will "
         "automatically generate the video copy, video materials, video subtitles, "
         "and video background music before synthesizing a high-definition short "
-        "video.\n\nhttps://github.com/harry0703/MoneyPrinterTurbo",
+        "video.\n\nhttps://github.com/AdrianRomo/Influencer-Automation-2.0",
     },
 )
 
 
 # Streamlit 1.59 会在页面右上角默认展示 Deploy、skills nudge 等平台入口。
-# MoneyPrinterTurbo 是面向终端用户的本地工具，这些入口会造成顶部大块空白，
+# Influencer-Automation 2.0 是面向终端用户的本地工具，这些入口会造成顶部大块空白，
 # 也会让新用户误以为需要安装额外组件。这里统一隐藏 Streamlit 平台工具栏，
 # 并压缩主容器顶部留白，只保留项目自己的标题、语言选择和业务设置区域。
 style_file = Path(__file__).with_name("styles.css")
@@ -85,7 +84,7 @@ locales = utils.load_locales(i18n_dir)
 DEFAULT_CHATTERBOX_BASE_URL = "http://127.0.0.1:4123/v1"
 DEFAULT_CHATTERBOX_MODEL = "chatterbox"
 DEFAULT_CHATTERBOX_VOICES = ["default-Female"]
-ONBOARDING_TOUR_KEY = "mpt-onboarding-v1"
+ONBOARDING_TOUR_KEY = "ia2-onboarding-v1"
 VOICE_MODE_TTS = "tts"
 VOICE_MODE_UPLOAD = "upload"
 VOICE_MODE_NONE = "none"
@@ -120,6 +119,32 @@ CUSTOM_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 _FINAL_VIDEO_PATTERN = re.compile(
     r"^final-(?P<index>\d+)\.(?P<extension>mp4|mov|mkv|webm)$",
     re.IGNORECASE,
+)
+_TASK_DETAIL_PARAM_KEYS = (
+    "content_mode",
+    "media_mode",
+    "video_source",
+    "video_aspect",
+    "video_concat_mode",
+    "video_transition_mode",
+    "video_clip_duration",
+    "video_clip_speed",
+    "video_count",
+    "video_language",
+    "paragraph_number",
+    "voice_name",
+    "voice_rate",
+    "voice_volume",
+    "bgm_type",
+    "bgm_volume",
+    "subtitle_enabled",
+    "font_name",
+    "subtitle_position",
+    "custom_position",
+    "font_size",
+    "text_fore_color",
+    "stroke_color",
+    "stroke_width",
 )
 
 
@@ -318,6 +343,141 @@ def _find_final_task_video(task_path: str) -> str:
     return os.path.join(task_path, file_name)
 
 
+def _as_task_video_list(value) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str) and item]
+    return []
+
+
+def _resolve_task_video_file(video_file: str) -> str:
+    if not isinstance(video_file, str) or not video_file.strip():
+        return ""
+
+    try:
+        return file_security.resolve_path_within_directory(
+            utils.task_dir(),
+            video_file,
+        )
+    except ValueError as exc:
+        logger.debug(f"task video is not downloadable: {video_file}, {exc}")
+        return ""
+
+
+def _task_video_download_name(task_id: str, video_file: str) -> str:
+    safe_task_id = re.sub(r"[^A-Za-z0-9._-]+", "-", str(task_id)).strip(".-")
+    safe_task_id = (safe_task_id or "task")[:80]
+
+    source_name = Path(video_file).name or "video.mp4"
+    safe_source_name = re.sub(r"[^A-Za-z0-9._-]+", "-", source_name).strip(".-")
+    source_path = Path(safe_source_name or "video.mp4")
+    extension = source_path.suffix or Path(video_file).suffix or ".mp4"
+    stem = source_path.stem or "video"
+
+    return f"{safe_task_id}-{stem}{extension}"
+
+
+def _task_video_mime_type(video_file: str) -> str:
+    mime_type, _ = mimetypes.guess_type(video_file)
+    return mime_type or "video/mp4"
+
+
+def _task_video_download_data(video_file: str):
+    def read_video_file():
+        with open(video_file, "rb") as f:
+            return f.read()
+
+    return read_video_file
+
+
+def _render_task_video_download_button(
+    task_id: str,
+    video_file: str,
+    key: str,
+    *,
+    use_container_width: bool = True,
+):
+    label = tr("Download Generated Video")
+    resolved_video_file = _resolve_task_video_file(video_file)
+    if not resolved_video_file:
+        st.download_button(
+            label,
+            data=b"",
+            file_name="generated-video.mp4",
+            mime="video/mp4",
+            key=key,
+            help=tr("Task Video Unavailable"),
+            disabled=True,
+            icon=":material/download:",
+            use_container_width=use_container_width,
+            on_click="ignore",
+        )
+        return
+
+    st.download_button(
+        label,
+        data=_task_video_download_data(resolved_video_file),
+        file_name=_task_video_download_name(task_id, resolved_video_file),
+        mime=_task_video_mime_type(resolved_video_file),
+        key=key,
+        help=label,
+        icon=":material/download:",
+        use_container_width=use_container_width,
+        on_click="ignore",
+    )
+
+
+def _resolve_task_directory(task_id) -> str:
+    if not str(task_id).strip():
+        return ""
+
+    tasks_root = os.path.realpath(utils.task_dir())
+    task_path = os.path.realpath(os.path.join(tasks_root, str(task_id)))
+    try:
+        if (
+            task_path == tasks_root
+            or os.path.commonpath([tasks_root, task_path]) != tasks_root
+        ):
+            raise ValueError("task path is outside the task directory")
+    except ValueError as exc:
+        logger.warning(f"invalid task directory: {task_id}, {exc}")
+        return ""
+
+    return task_path if os.path.isdir(task_path) else ""
+
+
+def _safe_load_task_json(task_path: str, file_name: str) -> dict:
+    if not task_path:
+        return {}
+
+    try:
+        json_path = file_security.resolve_path_within_directory(
+            task_path,
+            file_name,
+        )
+    except ValueError:
+        return {}
+
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return payload if isinstance(payload, dict) else {}
+    except Exception as exc:
+        logger.debug(f"failed to read task JSON data: {json_path}, {exc}")
+        return {}
+
+
+def _display_task_detail_params(params: Mapping | None) -> dict:
+    if not isinstance(params, Mapping):
+        return {}
+    return {
+        key: params[key]
+        for key in _TASK_DETAIL_PARAM_KEYS
+        if key in params and params[key] not in (None, "", [])
+    }
+
+
 def _build_restore_upload_requirements(params: Mapping) -> dict:
     """
     记录历史任务中无法由 Streamlit 自动恢复的上传文件依赖。
@@ -369,6 +529,14 @@ def _queue_task_restore(task_id):
     # 任务列表运行在 fragment 中，不能直接修改已经创建的主表单控件状态。
     # 这里只记录候选任务并触发整页 rerun，确认和参数恢复由主页面统一处理。
     st.session_state["task_restore_candidate_id"] = task_id
+    st.session_state["task_manager_popover_nonce"] = (
+        st.session_state.get("task_manager_popover_nonce", 0) + 1
+    )
+    st.rerun(scope="app")
+
+
+def _queue_task_video_preview(task_id):
+    st.session_state["task_video_preview_candidate_id"] = task_id
     st.session_state["task_manager_popover_nonce"] = (
         st.session_state.get("task_manager_popover_nonce", 0) + 1
     )
@@ -519,7 +687,7 @@ def _collect_task_summaries(limit=20):
 
         task_path = os.path.join(utils.task_dir(), task_id)
         history_task = history_tasks.get(task_id, {})
-        video_files = task.get("videos") or []
+        video_files = _as_task_video_list(task.get("videos"))
         video_file = (
             video_files[0] if video_files else history_task.get("video_file", "")
         )
@@ -571,40 +739,6 @@ def _collect_task_summaries(limit=20):
 
     tasks = list(history_tasks.values())
     return sorted(tasks, key=lambda item: item["mtime"], reverse=True)[:limit]
-
-
-def _open_task_path(task_path):
-    tasks_root = os.path.abspath(utils.task_dir())
-    normalized_path = os.path.abspath(task_path)
-    if not normalized_path.startswith(tasks_root + os.sep):
-        logger.warning(f"invalid task folder path: {normalized_path}")
-        return
-    if os.path.isdir(normalized_path):
-        webbrowser.open(f"file://{normalized_path}")
-
-
-def _open_task_video(video_file):
-    tasks_root = os.path.abspath(utils.task_dir())
-    normalized_file = os.path.abspath(video_file)
-
-    # 视频路径来自任务目录扫描或运行期状态。这里仍然限制只能打开任务目录
-    # 内的文件，避免 UI 操作被异常路径扩展成任意本地文件打开能力。
-    if not normalized_file.startswith(tasks_root + os.sep):
-        logger.warning(f"invalid task video path: {normalized_file}")
-        return
-    if not os.path.isfile(normalized_file):
-        logger.warning(f"task video does not exist: {normalized_file}")
-        return
-
-    try:
-        if sys.platform == "darwin":
-            subprocess.Popen(["open", normalized_file])
-        elif sys.platform.startswith("win"):
-            os.startfile(normalized_file)  # type: ignore[attr-defined]
-        else:
-            subprocess.Popen(["xdg-open", normalized_file])
-    except Exception as e:
-        logger.error(f"failed to open task video: {normalized_file}, {e}")
 
 
 def _delete_task(task_id, task_path, task_state=None):
@@ -683,7 +817,8 @@ def _render_task_table(filtered_tasks, key_prefix):
     with st.container(height=list_height, border=False):
         for task in visible_tasks:
             task_id = task["task_id"]
-            has_video = bool(task["video_file"] and os.path.isfile(task["video_file"]))
+            video_file = _resolve_task_video_file(task.get("video_file", ""))
+            has_video = bool(video_file)
             is_processing = _task_state_filter_key(task) == "processing"
             is_busy = is_processing or tm.is_task_busy(task)
             has_restore_data = os.path.isfile(
@@ -721,18 +856,14 @@ def _render_task_table(filtered_tasks, key_prefix):
                         help=play_label,
                         disabled=not has_video,
                     ):
-                        _open_task_video(task["video_file"])
+                        _queue_task_video_preview(task_id)
 
                 with action_cols[1]:
-                    open_label = tr("Open Task Folder")
-                    if st.button(
-                        open_label,
-                        key=f"open_task_{key_prefix}_{task_id}",
-                        use_container_width=True,
-                        icon=":material/folder_open:",
-                        help=open_label,
-                    ):
-                        _open_task_path(task["task_path"])
+                    _render_task_video_download_button(
+                        task_id,
+                        video_file,
+                        key=f"download_task_{key_prefix}_{task_id}",
+                    )
 
                 with action_cols[2]:
                     restore_label = tr("Regenerate Task")
@@ -1035,6 +1166,111 @@ def _render_task_restore_dialog(task_id):
         st.rerun(scope="app")
 
 
+def _load_task_video_preview_payload(task_id):
+    task_id = str(task_id)
+    task_path = _resolve_task_directory(task_id)
+    script_data = _safe_load_task_script(task_path) if task_path else {}
+    article_data = _safe_load_task_json(task_path, "article.json")
+    params = script_data.get("params") if isinstance(script_data, Mapping) else {}
+    if not isinstance(params, Mapping):
+        params = {}
+
+    try:
+        task = sm.state.get_task(task_id) or {}
+    except Exception as exc:
+        logger.debug(f"failed to load task state for preview: {task_id}, {exc}")
+        task = {}
+    if not isinstance(task, Mapping):
+        task = {}
+
+    video_candidates = _as_task_video_list(task.get("videos"))
+    if task_path:
+        video_candidates.append(_find_final_task_video(task_path))
+
+    video_file = ""
+    for candidate in video_candidates:
+        video_file = _resolve_task_video_file(candidate)
+        if video_file:
+            break
+    if not video_file:
+        return None
+
+    subject = (
+        task.get("video_subject")
+        or task.get("article_title")
+        or params.get("video_subject")
+        or article_data.get("title")
+        or (script_data.get("script", "")[:80] if script_data else "")
+        or task_id
+    )
+    search_terms = script_data.get("search_terms") or task.get("terms") or []
+    return {
+        "task_id": task_id,
+        "subject": subject,
+        "video_file": video_file,
+        "script": script_data.get("script") or task.get("script") or "",
+        "search_terms": search_terms,
+        "params": params,
+    }
+
+
+def _dismiss_task_video_preview_dialog():
+    st.session_state.pop("task_video_preview_candidate_id", None)
+
+
+@st.dialog(
+    tr("Task Video Preview"),
+    width="large",
+    on_dismiss=_dismiss_task_video_preview_dialog,
+)
+def _render_task_video_preview_dialog(task_id):
+    payload = _load_task_video_preview_payload(task_id)
+    if payload is None:
+        st.error(tr("Task Video Unavailable"))
+        if st.button(tr("Cancel"), key="cancel_invalid_task_video_preview"):
+            st.session_state.pop("task_video_preview_candidate_id", None)
+            st.rerun(scope="app")
+        return
+
+    st.caption(_format_task_subject(payload["subject"], max_length=100))
+    st.video(payload["video_file"])
+    _render_task_video_download_button(
+        payload["task_id"],
+        payload["video_file"],
+        key=f"download_preview_task_{payload['task_id']}",
+        use_container_width=False,
+    )
+
+    script_text = str(payload.get("script") or "").strip()
+    search_terms = payload.get("search_terms") or []
+    if isinstance(search_terms, list):
+        search_terms_text = ", ".join(str(term) for term in search_terms if term)
+    else:
+        search_terms_text = str(search_terms).strip()
+    settings = _display_task_detail_params(payload.get("params"))
+
+    if script_text or search_terms_text or settings:
+        with st.expander(tr("Task Details")):
+            if script_text:
+                st.text_area(
+                    tr("Video Script"),
+                    value=script_text,
+                    height=180,
+                    disabled=True,
+                    key=f"preview_script_{payload['task_id']}",
+                )
+            if search_terms_text:
+                st.text_area(
+                    tr("Video Keywords"),
+                    value=search_terms_text,
+                    height=90,
+                    disabled=True,
+                    key=f"preview_terms_{payload['task_id']}",
+                )
+            if settings:
+                st.json(settings, expanded=False)
+
+
 def _dismiss_settings_dialog():
     """关闭设置弹窗，并确保下一次整页 rerun 不会再次自动打开。"""
     st.session_state["settings_dialog_open"] = False
@@ -1050,7 +1286,7 @@ def _render_brand(available_update: str | None = None):
         # Streamlit 会继续用 Markdown 解析传入的 HTML。这里保持链接为单行，
         # 避免多行字符串的缩进被识别成代码块，导致页面直接显示 HTML 源码。
         update_link = (
-            '<a class="mpt-brand__update" '
+            '<a class="ia2-brand__update" '
             f'href="{version_checker.LATEST_RELEASE_PAGE_URL}" '
             'target="_blank" rel="noopener noreferrer" '
             f'aria-label="{update_label}" title="{update_label}">'
@@ -1058,13 +1294,13 @@ def _render_brand(available_update: str | None = None):
         )
     st.markdown(
         f"""
-        <h1 class="mpt-brand">
-            <span class="mpt-brand__name">MoneyPrinterTurbo</span>
-            <a class="mpt-brand__version"
-               href="https://github.com/harry0703/MoneyPrinterTurbo"
+        <h1 class="ia2-brand">
+            <span class="ia2-brand__name">Influencer-Automation 2.0</span>
+            <a class="ia2-brand__version"
+               href="https://github.com/AdrianRomo/Influencer-Automation-2.0"
                target="_blank"
                rel="noopener noreferrer"
-               aria-label="Open MoneyPrinterTurbo on GitHub"
+               aria-label="Open Influencer-Automation 2.0 on GitHub"
                title="Open project on GitHub">v{html.escape(str(config.project_version))}</a>
             {update_link}
         </h1>
@@ -1199,27 +1435,6 @@ def get_all_songs():
             if file.endswith(".mp3"):
                 songs.append(file)
     return songs
-
-
-def open_task_folder(task_id):
-    try:
-        # task_id 应始终是服务端生成的 UUID。这里先做格式校验，避免异常值
-        # 通过路径拼接访问任务目录之外的位置，也避免后续打开目录时触发
-        # 平台 shell 对特殊字符的解释。
-        normalized_task_id = str(UUID(str(task_id)))
-        tasks_root = os.path.abspath(os.path.join(root_dir, "storage", "tasks"))
-        path = os.path.abspath(os.path.join(tasks_root, normalized_task_id))
-
-        # 即使 UUID 校验通过，也再次确认最终路径仍在任务根目录内，避免
-        # 未来调用方调整 task_id 来源时引入路径穿越风险。
-        if not path.startswith(tasks_root + os.sep):
-            logger.warning(f"invalid task folder path: {path}")
-            return
-
-        if os.path.isdir(path):
-            webbrowser.open(f"file://{path}")
-    except Exception as e:
-        logger.exception(f"failed to open task folder: task_id={task_id}, error={e}")
 
 
 @st.cache_resource
@@ -1374,7 +1589,13 @@ def _render_generation_task_snapshot(task_id, task):
     try:
         player_cols = st.columns(len(video_files) * 2 + 1)
         for i, url in enumerate(video_files):
-            player_cols[i * 2 + 1].video(url)
+            with player_cols[i * 2 + 1]:
+                st.video(url)
+                _render_task_video_download_button(
+                    task_id,
+                    url,
+                    key=f"download_current_task_{task_id}_{i}",
+                )
     except Exception as exc:
         logger.exception(
             f"failed to render generated video preview: task_id={task_id}, "
@@ -1382,11 +1603,8 @@ def _render_generation_task_snapshot(task_id, task):
         )
 
     _render_generation_logs(task_id)
-    if st.session_state.get("opened_generation_task_id") != task_id:
-        # 原同步流程会在生成完成后自动打开任务目录。Fragment 可能重复运行，
-        # 因此用会话标记保证每个任务只打开一次，避免连续弹出 Finder/资源管理器。
-        st.session_state["opened_generation_task_id"] = task_id
-        open_task_folder(task_id)
+    if st.session_state.get("completed_generation_task_id") != task_id:
+        st.session_state["completed_generation_task_id"] = task_id
         logger.info(f"{tr('Video Generation Completed')}: task_id={task_id}")
 
 
@@ -4651,6 +4869,10 @@ def _render_application():
 
     if st.session_state.get("settings_dialog_open", False):
         _render_settings_dialog()
+
+    preview_candidate_id = st.session_state.get("task_video_preview_candidate_id")
+    if preview_candidate_id:
+        _render_task_video_preview_dialog(preview_candidate_id)
 
     restore_applied = _apply_pending_task_restore()
     restore_candidate_id = st.session_state.get("task_restore_candidate_id")

@@ -5,10 +5,10 @@ FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Set the working directory in the container
-WORKDIR /MoneyPrinterTurbo
-RUN chmod 777 /MoneyPrinterTurbo
+WORKDIR /influencer-automation-2.0
+RUN chmod 777 /influencer-automation-2.0
 
-ENV PYTHONPATH="/MoneyPrinterTurbo"
+ENV PYTHONPATH="/influencer-automation-2.0"
 
 # Install Python 3.11 and system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

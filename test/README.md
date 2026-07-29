@@ -1,6 +1,6 @@
-# MoneyPrinterTurbo Test Directory
+# Influencer-Automation 2.0 Test Directory
 
-This directory contains unit tests for the **MoneyPrinterTurbo** project.
+This directory contains unit tests for the **Influencer-Automation 2.0** project.
 
 ## Directory Structure
 
@@ -38,7 +38,7 @@ uv run python -m coverage report
 ```
 
 Live provider tests are skipped by default. To run tests that may call external
-TTS or LLM services, set `MPT_RUN_INTEGRATION_TESTS=1` and provide the required
+TTS or LLM services, set `IA2_RUN_INTEGRATION_TESTS=1` and provide the required
 provider credentials.
 
 ## Adding New Tests
