@@ -63,6 +63,25 @@ class TestConfigPersistence:
         assert upload_post_keys <= example_config["app"].keys()
         assert upload_post_keys.isdisjoint(example_config.get("ui", {}).keys())
 
+    def test_postiz_settings_belong_to_app_section(self):
+        """Postiz 调度配置必须位于 app 节点，避免运行时读取不到。"""
+        example_config = self._load_example_config()
+        postiz_keys = {
+            "postiz_enabled",
+            "postiz_base_url",
+            "postiz_api_key",
+            "postiz_integration_id",
+            "postiz_provider_type",
+            "postiz_auto_schedule_enabled",
+            "postiz_schedule_interval_hours",
+            "postiz_schedule_jitter_minutes",
+            "postiz_daily_post_cap",
+            "postiz_post_type",
+        }
+
+        assert postiz_keys <= example_config["app"].keys()
+        assert postiz_keys.isdisjoint(example_config.get("ui", {}).keys())
+
     def test_save_config_uses_parseable_atomic_output(self):
         """
         配置保存先写临时文件再原子替换。测试同时确认输出仍是合法 TOML，

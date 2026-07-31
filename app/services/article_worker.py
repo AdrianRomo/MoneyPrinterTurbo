@@ -264,35 +264,96 @@ def _render_cluster(
             repo.save_article(article)
 
     published = False
+    publish_result: dict = {}
     can_publish, publish_reason = article_pipeline.should_publish(
         assessment, settings, mode, sensitive=bool(outcome.get("sensitive"))
     )
     if can_publish and repo.count_publications() < settings.max_publications_per_day:
-        published = _publish(task_id, script)
-        repo.record_generation(cluster.id, f"{task_id}:publish", published=published)
+        publish_result = _publish(task_id, script)
+        published = bool(publish_result.get("success"))
+        if published:
+            provider = publish_result.get("provider") or "publisher"
+            publish_id = publish_result.get("post_id") or publish_result.get("request_id") or "ok"
+            repo.record_generation(
+                cluster.id,
+                f"{task_id}:publish:{provider}:{publish_id}",
+                published=True,
+            )
+        else:
+            logger.warning(
+                f"auto-publish failed for cluster {cluster.id}: "
+                f"{publish_result.get('error', 'unknown error')}"
+            )
     else:
         logger.info(f"not auto-publishing cluster {cluster.id}: {publish_reason}")
 
-    return {"rendered": True, "task_id": task_id, "published": published}
+    result = {"rendered": True, "task_id": task_id, "published": published}
+    if publish_result:
+        result["publish_result"] = publish_result
+    return result
 
 
-def _publish(task_id: str, script) -> bool:
-    """Best-effort auto-publish via the existing Upload-Post integration."""
+def _caption_for_script(script) -> str:
+    metadata = getattr(script, "social_metadata", None)
+    candidates = [
+        getattr(metadata, "instagram_caption", "") if metadata else "",
+        getattr(metadata, "tiktok_caption", "") if metadata else "",
+        getattr(metadata, "youtube_description", "") if metadata else "",
+        getattr(script, "summary", ""),
+        getattr(script, "hook", ""),
+        getattr(script, "title", ""),
+    ]
+    caption = next((str(value).strip() for value in candidates if str(value).strip()), "")
+    hashtags = []
+    if metadata:
+        for tag in getattr(metadata, "hashtags", []) or []:
+            cleaned = str(tag).strip()
+            if not cleaned:
+                continue
+            cleaned = cleaned if cleaned.startswith("#") else f"#{cleaned}"
+            if cleaned.lower() not in {existing.lower() for existing in hashtags}:
+                hashtags.append(cleaned)
+    if hashtags:
+        existing_caption = caption.lower()
+        missing = [tag for tag in hashtags[:6] if tag.lower() not in existing_caption]
+        if missing:
+            caption = f"{caption}\n\n{' '.join(missing)}".strip()
+    return caption[:2200].strip()
+
+
+def _publish(task_id: str, script) -> dict:
+    """Auto-publish or schedule a rendered Article Mode video."""
     try:
         from app.services import state as sm
         from app.services import upload_post
+        from app.services import postiz
+
+        task = sm.state.get_task(task_id) or {}
+        videos = task.get("videos") or []
+        if not videos:
+            return {"success": False, "error": "rendered video not found"}
+
+        caption = _caption_for_script(script)
+        if not caption:
+            return {"success": False, "error": "caption is empty"}
+
+        if postiz.postiz_service.enabled or postiz.postiz_service.auto_schedule_enabled:
+            if not postiz.postiz_service.is_auto_schedule_configured():
+                return {"success": False, "error": "Postiz auto-scheduling is not configured"}
+            result = postiz.schedule_video(videos[0], caption)
+            result["provider"] = "postiz"
+            return result
 
         if not (
             upload_post.upload_post_service.is_configured()
             and upload_post.upload_post_service.platforms
         ):
-            return False
-        task = sm.state.get_task(task_id) or {}
-        videos = task.get("videos") or []
-        if not videos:
-            return False
+            return {"success": False, "error": "no publishing integration configured"}
+
+        successes = []
+        failures = []
         for video_path in videos:
-            upload_post.cross_post_video(
+            result = upload_post.cross_post_video(
                 video_path=video_path,
                 title=script.social_metadata.youtube_title or script.title,
                 platforms=list(upload_post.upload_post_service.platforms),
@@ -303,10 +364,29 @@ def _publish(task_id: str, script) -> bool:
                     "containsSyntheticMedia": True,
                 },
             )
-        return True
+            if result.get("success"):
+                successes.append(result)
+            else:
+                failures.append(result)
+        if successes:
+            return {
+                "success": True,
+                "provider": "upload_post",
+                "request_id": successes[0].get("request_id", "ok"),
+                "results": successes + failures,
+            }
+        error = "Upload-Post failed"
+        if failures:
+            error = failures[0].get("error") or failures[0].get("message") or error
+        return {
+            "success": False,
+            "provider": "upload_post",
+            "error": error,
+            "results": failures,
+        }
     except Exception as exc:
         logger.warning(f"auto-publish failed for task {task_id}: {exc}")
-        return False
+        return {"success": False, "error": str(exc)}
 
 
 def _media_mode(subscription: Optional[TopicSubscription]) -> MediaMode:

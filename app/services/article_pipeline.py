@@ -378,6 +378,61 @@ def _media_mode(params: VideoParams) -> MediaMode:
 # ---------------------------------------------------------------------------
 
 
+def _append_unique_terms(target: list[str], terms: list[str], limit: int) -> None:
+    seen = {term.lower() for term in target}
+    for term in terms:
+        value = str(term or "").strip()
+        if not value:
+            continue
+        key = value.lower()
+        if key in seen:
+            continue
+        target.append(value)
+        seen.add(key)
+        if len(target) >= limit:
+            return
+
+
+def _script_entity_terms(script: GeneratedScript, limit: int = 12) -> list[str]:
+    """Best-effort real-subject terms for visual search/ranking.
+
+    The script artifact intentionally stores only bounded provenance, so render
+    tasks recover ArticleRecord entities from the repository when possible and
+    fall back to safe title/source metadata otherwise.
+    """
+    terms: list[str] = []
+    try:
+        if script.cluster_id or script.primary_article_id:
+            from app.services.article_repository import get_repository
+
+            repo = get_repository()
+            articles: list[ArticleRecord] = []
+            if script.cluster_id:
+                articles.extend(repo.list_articles(cluster_id=script.cluster_id, limit=10))
+            if script.primary_article_id and not any(
+                article.id == script.primary_article_id for article in articles
+            ):
+                article = repo.get_article(script.primary_article_id)
+                if article:
+                    articles.append(article)
+            for article in articles:
+                _append_unique_terms(terms, article.entities, limit)
+                _append_unique_terms(terms, article.keywords, limit)
+                if len(terms) >= limit:
+                    return terms[:limit]
+    except Exception as exc:  # noqa: BLE001 - media search can proceed without bias
+        logger.debug(f"article entity lookup unavailable for media selection: {exc}")
+
+    source_titles = " ".join(source.title for source in script.sources if source.title)
+    fallback_text = f"{script.title}. {script.hook}. {script.summary}. {source_titles}"
+    _append_unique_terms(
+        terms,
+        article_ingestion.entities_of(fallback_text, limit=limit),
+        limit,
+    )
+    return terms[:limit]
+
+
 def render_article_video(task_id: str, params: VideoParams, stop_at: str = "video") -> dict:
     """Render an article video, reusing the existing TTS/subtitle/compositor.
 
@@ -421,7 +476,7 @@ def render_article_video(task_id: str, params: VideoParams, stop_at: str = "vide
     aspect = VideoAspect(params.video_aspect)
     settings = load_automation_settings()
     media_mode = _media_mode(params)
-    entities: List[str] = []
+    entities = _script_entity_terms(script)
 
     clip_paths, chosen_assets = build_visual_timeline(
         task_id,

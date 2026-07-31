@@ -298,6 +298,25 @@ upload_post_youtube_privacy_status = "public"
 # Cross-post jobs run in the current process and are not resumed after restart.
 upload_post_max_pending_tasks = 10
 
+# Postiz can schedule generated Article Mode videos to Instagram through the
+# self-hosted public API. Keep disabled until the API URL, key and exact
+# Instagram integration id have been verified with `GET /integrations`.
+# First approved evergreen lane: Bible tips for everyday growth. Suggested
+# account promise: "One Bible-based tip to grow in your day-to-day life."
+postiz_enabled = false
+postiz_base_url = "https://postiz.thestarrynight.dev/public/v1"
+postiz_api_key = ""
+postiz_integration_id = ""
+# "instagram" for FB-linked Instagram, or "instagram-standalone".
+postiz_provider_type = "instagram"
+postiz_auto_schedule_enabled = false
+# Autonomous Article Mode scheduling spaces posts out instead of posting now.
+postiz_schedule_interval_hours = 2
+postiz_schedule_jitter_minutes = 30
+postiz_daily_post_cap = 8
+# Instagram setting sent as settings.post_type. Keep "post" for reels/feed.
+postiz_post_type = "post"
+
 # -----------------------------------------------------------------------------
 # Article Mode / 文章模式 (automation-first news-to-video)
 # -----------------------------------------------------------------------------

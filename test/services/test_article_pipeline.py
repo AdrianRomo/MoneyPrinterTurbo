@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from PIL import Image
 
 from app.models.article import (
+    ArticleRecord,
     ArticleSource,
     AutomationMode,
     AutomationSettings,
@@ -178,6 +179,36 @@ class TestRenderPath(unittest.TestCase):
         self.assertEqual(result.get("failed_stage"), "research")
         audio_mock.assert_not_called()
         sub_mock.assert_not_called()
+
+    def test_script_entity_terms_uses_repo_article_subjects(self):
+        article = ArticleRecord(
+            id="article-1",
+            cluster_id="cluster-1",
+            title="NASA Mars update",
+            entities=["NASA", "Mars"],
+            keywords=["launch"],
+        )
+
+        class Repo:
+            def list_articles(self, **_kwargs):
+                return [article]
+
+            def get_article(self, _article_id):
+                return article
+
+        script = GeneratedScript(
+            cluster_id="cluster-1",
+            primary_article_id="article-1",
+            title="NASA Mars update",
+            scenes=[Scene(narration="a")],
+        )
+        with patch(
+            "app.services.article_repository.get_repository",
+            return_value=Repo(),
+        ):
+            terms = article_pipeline._script_entity_terms(script)
+
+        self.assertEqual(terms[:3], ["NASA", "Mars", "launch"])
 
 
 class TestResolveScript(unittest.TestCase):

@@ -57,6 +57,7 @@ class TestImageProviders(unittest.TestCase):
                     "id": 123, "width": 1080, "height": 1920,
                     "photographer": "Jane Doe",
                     "url": "https://www.pexels.com/photo/123/?utm_source=x",
+                    "alt": "Downtown city skyline at dusk",
                     "src": {"large2x": "https://images.pexels.com/123?auto=compress"},
                 }
             ]
@@ -69,6 +70,7 @@ class TestImageProviders(unittest.TestCase):
         asset = assets[0]
         self.assertEqual(asset.provider, "pexels")
         self.assertEqual(asset.creator, "Jane Doe")
+        self.assertIn("city skyline", asset.metadata_text.lower())
         self.assertEqual(asset.license_name, "Pexels License")
         # source page URL is stripped of query params (no tracking / secrets)
         self.assertEqual(asset.source_page_url, "https://www.pexels.com/photo/123/")
@@ -79,6 +81,7 @@ class TestImageProviders(unittest.TestCase):
                 {
                     "id": 7, "imageWidth": 1920, "imageHeight": 1280, "user": "Bob",
                     "pageURL": "https://pixabay.com/photos/x-7/",
+                    "tags": "mountain valley, alpine",
                     "largeImageURL": "https://pixabay.com/get/7.jpg?token=abc",
                 }
             ]
@@ -90,6 +93,7 @@ class TestImageProviders(unittest.TestCase):
             assets = material.search_images_pixabay("mountain", VideoAspect.landscape)
         self.assertEqual(len(assets), 1)
         self.assertEqual(assets[0].provider, "pixabay")
+        self.assertIn("mountain valley", assets[0].metadata_text)
         self.assertEqual(assets[0].license_name, "Pixabay Content License")
 
 
@@ -130,6 +134,66 @@ class TestLicenseMetadataPersistence(unittest.TestCase):
         self.assertEqual(entry["source_page_url"], "https://www.pexels.com/photo/1/")
         self.assertNotIn("token", str(entry))  # signed download URL never persisted
         self.assertEqual(entry["local_file"], "article-scene-1.mp4")
+
+
+class TestAssetRelevance(unittest.TestCase):
+    def test_score_uses_provider_metadata_not_echoed_search_query(self):
+        asset = MediaAsset(
+            media_type="image",
+            provider="pexels",
+            asset_id="1",
+            search_query="central bank building",
+            metadata_text="cute kitten playing with yarn",
+            width=1080,
+            height=1920,
+        )
+
+        score = material.score_asset_relevance(
+            asset, "central bank building", video_aspect=VideoAspect.portrait
+        )
+
+        self.assertLess(score, 0.4)
+
+    def test_score_rewards_metadata_overlap(self):
+        asset = MediaAsset(
+            media_type="image",
+            provider="pexels",
+            asset_id="1",
+            metadata_text="central bank building exterior",
+            width=1080,
+            height=1920,
+        )
+
+        score = material.score_asset_relevance(
+            asset, "central bank building", video_aspect=VideoAspect.portrait
+        )
+
+        self.assertGreaterEqual(score, 0.6)
+
+    def test_select_scene_assets_skips_metadata_mismatch(self):
+        scene = Scene(
+            narration="Central bank raises rates.",
+            visual_queries=["central bank building"],
+        )
+
+        assets = material.select_scene_assets(
+            "pexels",
+            [scene],
+            video_aspect=VideoAspect.portrait,
+            searcher=lambda _query: [
+                MediaAsset(
+                    media_type="image",
+                    provider="pexels",
+                    asset_id="kitten",
+                    url="u",
+                    metadata_text="cute kitten playing with yarn",
+                    width=1080,
+                    height=1920,
+                )
+            ],
+        )
+
+        self.assertEqual(assets, [])
 
 
 class TestMediaRendering(unittest.TestCase):

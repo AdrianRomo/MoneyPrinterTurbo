@@ -410,6 +410,16 @@ metadata in {language or 'the same language as the sources'}.
 {known_unknowns}
 {revision}
 
+## Visual query rules
+- Each scene's visual_queries must be concrete 2-5 word stock-media phrases
+  grounded in that scene and the source material.
+- Include real source people, places, organizations, products or event names
+  when that makes the search more specific.
+- Avoid broad generic terms like "news", "technology", "meeting" or "people"
+  unless they are combined with source-specific context.
+- If exact licensed footage is unlikely, choose honest contextual B-roll and
+  set is_contextual_visual=true.
+
 ## Output
 Respond with ONE JSON object:
 {{

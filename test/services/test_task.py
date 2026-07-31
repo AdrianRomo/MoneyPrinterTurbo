@@ -522,6 +522,41 @@ class TestTaskService(unittest.TestCase):
             video_script="先城市，再地铁",
             amount=8,
             match_script_order=True,
+            seed_terms=[],
+        )
+
+    def test_generate_terms_seeds_from_reference_article_entities(self):
+        params = VideoParams(
+            video_subject="Mars launch",
+            video_script="",
+            reference_source_url="https://news.example.com/mars",
+        )
+        reference = SimpleNamespace(title="NASA Mars update", text="NASA reached Mars.")
+
+        with (
+            patch(
+                "app.services.article_draft.fetch_reference",
+                return_value=reference,
+            ) as fetch_reference,
+            patch(
+                "app.services.article_draft.reference_entities",
+                return_value=["NASA", "Mars"],
+            ) as reference_entities,
+            patch.object(
+                tm.llm, "generate_terms", return_value=["NASA Mars"]
+            ) as generate,
+        ):
+            result = tm.generate_terms("task-id", params, "NASA reached Mars.")
+
+        self.assertEqual(result, ["NASA Mars"])
+        fetch_reference.assert_called_once_with("https://news.example.com/mars")
+        reference_entities.assert_called_once_with(reference)
+        generate.assert_called_once_with(
+            video_subject="Mars launch",
+            video_script="NASA reached Mars.",
+            amount=5,
+            match_script_order=False,
+            seed_terms=["NASA", "Mars"],
         )
 
     def test_start_stops_before_materials_when_term_provider_fails(self):

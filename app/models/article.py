@@ -463,6 +463,7 @@ class MediaAsset(BaseModel):
     duration: float = 0.0
     asset_id: str = ""
     creator: str = ""
+    metadata_text: str = ""
     license_name: str = ""
     license_url: str = ""
     attribution_text: str = ""

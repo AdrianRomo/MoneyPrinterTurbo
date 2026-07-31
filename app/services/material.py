@@ -388,6 +388,10 @@ def search_videos_pexels(
                     str(v.get("id")) if v.get("id") is not None else None
                 ),
                 "source_page": _safe_public_url(v.get("url")),
+                "metadata_text": _coerce_metadata_text(
+                    v.get("tags"),
+                    _semantic_text_from_url(v.get("url")),
+                ),
                 "creator": _creator_info(v.get("user")),
                 "rendition": {
                     "id": rendition_id,
@@ -501,6 +505,10 @@ def search_videos_pixabay(
                     str(v.get("id")) if v.get("id") is not None else None
                 ),
                 "source_page": _safe_public_url(v.get("pageURL")),
+                "metadata_text": _coerce_metadata_text(
+                    v.get("tags"),
+                    _semantic_text_from_url(v.get("pageURL")),
+                ),
                 "creator": _creator_info(
                     {
                         "id": v.get("user_id"),
@@ -598,6 +606,13 @@ def search_videos_coverr(
                 "search_term": search_term,
                 "asset_id": str(video_id),
                 "source_page": _safe_public_url(v.get("canonical_url") or v.get("url")),
+                "metadata_text": _coerce_metadata_text(
+                    v.get("title"),
+                    v.get("name"),
+                    v.get("description"),
+                    v.get("tags"),
+                    _semantic_text_from_url(v.get("canonical_url") or v.get("url")),
+                ),
                 "creator": _creator_info(v.get("creator") or v.get("author")),
                 "rendition": {
                     "id": "mp4_download",
@@ -1203,6 +1218,23 @@ _IMAGE_MAGIC_BYTES = (
 )
 _MIN_IMAGE_DIMENSION = 400
 _MAX_IMAGE_BYTES = 20 * 1024 * 1024
+_MIN_SCENE_ASSET_RELEVANCE = 0.4
+_RELEVANCE_STOPWORDS = {
+    "and",
+    "are",
+    "for",
+    "from",
+    "image",
+    "images",
+    "photo",
+    "photos",
+    "pexels",
+    "pixabay",
+    "the",
+    "video",
+    "videos",
+    "with",
+}
 
 
 def _orientation_for(aspect: VideoAspect) -> str:
@@ -1211,6 +1243,31 @@ def _orientation_for(aspect: VideoAspect) -> str:
     if aspect == VideoAspect.landscape:
         return "landscape"
     return "square"
+
+
+def _semantic_text_from_url(value: Any) -> str:
+    try:
+        parsed = urlsplit(str(value or ""))
+    except ValueError:
+        return ""
+    path_text = re.sub(r"[^A-Za-z0-9]+", " ", parsed.path)
+    return path_text.strip()
+
+
+def _coerce_metadata_text(*parts: Any) -> str:
+    values: list[str] = []
+    for part in parts:
+        if part is None:
+            continue
+        if isinstance(part, list):
+            values.extend(_coerce_metadata_text(item) for item in part)
+        elif isinstance(part, dict):
+            values.extend(_coerce_metadata_text(value) for value in part.values())
+        else:
+            text = str(part).strip()
+            if text:
+                values.append(text)
+    return " ".join(value for value in values if value).strip()[:1000]
 
 
 def search_images_pexels(
@@ -1240,6 +1297,7 @@ def search_images_pexels(
             download_url = src.get("large2x") or src.get("large") or src.get("original")
             if not download_url:
                 continue
+            source_page = safe_public_page(photo.get("url"))
             assets.append(
                 MediaAsset(
                     media_type="image",
@@ -1249,12 +1307,16 @@ def search_images_pexels(
                     height=int(photo.get("height") or 0),
                     asset_id=str(photo.get("id") or ""),
                     creator=str(photo.get("photographer") or ""),
+                    metadata_text=_coerce_metadata_text(
+                        photo.get("alt"),
+                        _semantic_text_from_url(source_page),
+                    ),
                     license_name=_PEXELS_LICENSE[0],
                     license_url=_PEXELS_LICENSE[1],
                     attribution_text=(
                         f"Photo by {photo.get('photographer', 'Pexels')} on Pexels"
                     ),
-                    source_page_url=safe_public_page(photo.get("url")),
+                    source_page_url=source_page,
                     search_query=search_term,
                 )
             )
@@ -1300,6 +1362,7 @@ def search_images_pixabay(
             download_url = hit.get("largeImageURL") or hit.get("webformatURL")
             if not download_url:
                 continue
+            source_page = safe_public_page(hit.get("pageURL"))
             assets.append(
                 MediaAsset(
                     media_type="image",
@@ -1309,12 +1372,16 @@ def search_images_pixabay(
                     height=int(hit.get("imageHeight") or 0),
                     asset_id=str(hit.get("id") or ""),
                     creator=str(hit.get("user") or ""),
+                    metadata_text=_coerce_metadata_text(
+                        hit.get("tags"),
+                        _semantic_text_from_url(source_page),
+                    ),
                     license_name=_PIXABAY_LICENSE[0],
                     license_url=_PIXABAY_LICENSE[1],
                     attribution_text=(
                         f"Image by {hit.get('user', 'Pixabay')} on Pixabay"
                     ),
-                    source_page_url=safe_public_page(hit.get("pageURL")),
+                    source_page_url=source_page,
                     search_query=search_term,
                 )
             )
@@ -1363,6 +1430,10 @@ def _material_video_to_asset(item: MaterialInfo, search_term: str) -> MediaAsset
         duration=float(item.duration or 0),
         asset_id=str(source.get("asset_id") or ""),
         creator=creator,
+        metadata_text=_coerce_metadata_text(
+            source.get("metadata_text"),
+            _semantic_text_from_url(source.get("source_page")),
+        ),
         license_name=license_name,
         license_url=license_url,
         attribution_text=(
@@ -1471,6 +1542,14 @@ def save_image(image_url: str, save_dir: str = "") -> str:
     return ""
 
 
+def _relevance_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.split(r"[^a-z0-9]+", (text or "").lower())
+        if len(token) > 2 and token not in _RELEVANCE_STOPWORDS
+    }
+
+
 def score_asset_relevance(
     asset: MediaAsset,
     query: str,
@@ -1482,10 +1561,23 @@ def score_asset_relevance(
     Combines query/metadata token overlap, orientation fit and resolution. This
     is a fast pre-filter; an optional multimodal scorer can be layered on top via
     the pipeline without changing this interface."""
-    query_tokens = {t for t in re.split(r"[^a-z0-9]+", (query or "").lower()) if len(t) > 2}
-    meta = f"{asset.search_query} {asset.creator} {asset.attribution_text}".lower()
-    meta_tokens = {t for t in re.split(r"[^a-z0-9]+", meta) if len(t) > 2}
-    overlap = len(query_tokens & meta_tokens) / max(1, len(query_tokens)) if query_tokens else 0.5
+    query_tokens = _relevance_tokens(query)
+    meta = _coerce_metadata_text(
+        getattr(asset, "metadata_text", ""),
+        asset.source_page_url,
+        asset.creator,
+        asset.attribution_text,
+    ).lower()
+    meta_tokens = _relevance_tokens(meta)
+    if query_tokens and meta_tokens:
+        overlap = len(query_tokens & meta_tokens) / max(1, len(query_tokens))
+    elif query_tokens:
+        # Some providers return little or no semantic metadata for a valid
+        # result. Keep those candidates possible, but do not treat them as
+        # verified matches.
+        overlap = 0.55
+    else:
+        overlap = 0.5
     entity_bonus = 0.0
     if entities:
         entity_text = meta
@@ -1498,7 +1590,51 @@ def score_asset_relevance(
         orient_score = max(0.0, 1.0 - min(1.0, abs(ratio - target) / target))
     resolution_score = min(1.0, (min(asset.width, asset.height) or 0) / 1080.0)
     score = 0.5 * overlap + 0.2 * orient_score + 0.2 * resolution_score + entity_bonus
+    if query_tokens and meta_tokens and overlap <= 0 and entity_bonus <= 0:
+        score = min(score, _MIN_SCENE_ASSET_RELEVANCE - 0.05)
     return round(max(0.0, min(1.0, score)), 4)
+
+
+def _query_contains_entity(query: str, entities: List[str]) -> bool:
+    query_text = f" {query.lower()} "
+    for entity in entities:
+        entity_text = str(entity or "").strip().lower()
+        if entity_text and entity_text in query_text:
+            return True
+    return False
+
+
+def _scene_search_queries(scene, entities: List[str] | None = None) -> list[str]:
+    raw_queries = list(getattr(scene, "visual_queries", []) or [])
+    if not raw_queries:
+        raw_queries = [getattr(scene, "narration", "")[:60]]
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for query in raw_queries:
+        value = str(query or "").strip()
+        key = value.lower()
+        if value and key not in seen:
+            cleaned.append(value)
+            seen.add(key)
+
+    if not entities:
+        return cleaned
+
+    contextual: list[str] = []
+    for query in cleaned:
+        if not _query_contains_entity(query, entities):
+            for entity in entities[:2]:
+                entity_text = str(entity or "").strip()
+                if not entity_text:
+                    continue
+                value = f"{entity_text} {query}".strip()
+                key = value.lower()
+                if key not in seen:
+                    contextual.append(value)
+                    seen.add(key)
+        contextual.append(query)
+    return contextual[:8]
 
 
 def select_scene_assets(
@@ -1508,6 +1644,7 @@ def select_scene_assets(
     entities: List[str] | None = None,
     media_mode: str = "images_only",
     searcher=None,
+    minimum_relevance: float = _MIN_SCENE_ASSET_RELEVANCE,
 ) -> List[MediaAsset]:
     """Pick one best asset per scene, in scene order.
 
@@ -1528,9 +1665,7 @@ def select_scene_assets(
     chosen: List[MediaAsset] = []
     used_asset_keys: set = set()
     for beat_index, scene in enumerate(scenes):
-        queries = list(getattr(scene, "visual_queries", []) or [])
-        if not queries:
-            queries = [getattr(scene, "narration", "")[:60]]
+        queries = _scene_search_queries(scene, entities)
         best: MediaAsset | None = None
         best_score = -1.0
         for query in queries:
@@ -1550,7 +1685,7 @@ def select_scene_assets(
                     best, best_score = asset, asset.relevance_score
             if best is not None and best_score >= 0.6:
                 break  # good enough; don't burn extra queries
-        if best is not None:
+        if best is not None and best_score >= minimum_relevance:
             best.beat_index = beat_index
             best.illustrative = bool(getattr(scene, "is_contextual_visual", True))
             best.selection_reason = (
