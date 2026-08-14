@@ -398,8 +398,18 @@ class PostizService:
         except (ValueError, requests.exceptions.RequestException) as exc:
             return self._request_failure("post creation", exc)
 
+        # Postiz's public API returns a JSON *array* of the created posts (one per
+        # integration in the request); other/older deployments return a bare object.
+        # Accept both. Getting this wrong is worse than it looks: the post has already
+        # been created at this point (the call was 2xx), so reporting failure here
+        # invites a retry that double-posts.
+        if isinstance(result, list):
+            result = next((item for item in result if isinstance(item, dict)), None)
         if not isinstance(result, dict):
-            return self._failure("Postiz create post response was not an object")
+            return self._failure(
+                "Postiz create post response was neither an object nor a "
+                "non-empty array of objects"
+            )
         post_id = str(
             result.get("postId")
             or result.get("post_id")

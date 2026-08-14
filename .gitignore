@@ -1,6 +1,9 @@
 .DS_Store
 /config.toml
 /config.toml.bak
+# Dated backups (config.toml.bak-YYYY-MM-DD) hold the same API keys as the
+# original and were NOT matched by the line above.
+/config.toml.bak*
 /.env
 /.env.*
 /storage/
