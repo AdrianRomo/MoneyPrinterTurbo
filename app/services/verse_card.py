@@ -34,6 +34,7 @@ from loguru import logger
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from app.config import config
+from app.services import typography as ty
 
 # --- constants ---------------------------------------------------------------
 
@@ -51,10 +52,6 @@ SDXL_BUCKET = {
 }
 
 PUBLIC_DOMAIN_TRANSLATIONS = {"kjv", "web"}
-
-FONT_DIR = "/influencer-automation-2.0/resource/fonts"
-FONT_VERSE = os.path.join(FONT_DIR, "BeVietnamPro-Medium.ttf")
-FONT_REF = os.path.join(FONT_DIR, "BeVietnamPro-Bold.ttf")
 
 # Backgrounds are deliberately unpeopled. AI depictions of Jesus or biblical
 # figures land in the uncanny valley and reliably draw criticism on faith
@@ -371,12 +368,14 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
     verse_text = f"“{verse.text}”"
     # Cap the type a little smaller than the box allows: restraint and negative
     # space are what separate a designed card from a generated one.
-    font_v, lines = _fit_font(draw, verse_text, FONT_VERSE, max_w,
-                              int(band_h * 0.58), start=int(w * 0.064),
-                              min_size=int(w * 0.028), line_ratio=1.42)
-    line_h = int(font_v.size * 1.38)
-    ref_size = max(int(font_v.size * 0.40), int(w * 0.020))
-    font_r = ImageFont.truetype(FONT_REF, ref_size)
+    # Scripture in a Garamond reads as timeless rather than as a template.
+    # Cormorant is delicate, so it is set larger than a sans would be.
+    font_v, lines = ty.fit(draw, verse_text, ty.SERIF, max_w, int(band_h * 0.62),
+                           start=int(w * 0.092), min_size=int(w * 0.040),
+                           instance="Medium", tracking=0.0, leading=ty.LEAD_BODY)
+    line_h = int(font_v.size * ty.LEAD_BODY)
+    ref_size = max(int(font_v.size * 0.26), int(w * 0.0155))
+    font_r = ty.font(ty.SANS, ref_size, "Medium")
 
     rule_gap = int(font_v.size * 0.95)
     block_h = len(lines) * line_h + rule_gap + ref_size
@@ -418,8 +417,7 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
     # Verse — centred, generous leading.
     y = block_top
     for line in lines:
-        tw = draw.textlength(line, font=font_v)
-        draw.text(((w - tw) / 2, y), line, font=font_v, fill=(255, 255, 255))
+        ty.draw_centered(draw, w, y, line, font_v, (255, 255, 255))
         y += line_h
 
     # Hairline rule, then the reference in tracked small caps.
@@ -429,10 +427,8 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
               fill=(255, 255, 255, 120), width=max(1, int(h * 0.0012)))
 
     ref_text = f"{verse.reference}  ·  {verse.translation}".upper()
-    tracking = ref_size * 0.16
-    ref_w = sum(draw.textlength(c, font=font_r) for c in ref_text) + tracking * (len(ref_text) - 1)
-    _draw_tracked(draw, ((w - ref_w) / 2, rule_y + int(rule_gap * 0.42)),
-                  ref_text, font_r, (255, 255, 255), tracking)
+    ty.draw_centered(draw, w, rule_y + int(rule_gap * 0.42), ref_text, font_r,
+                     (255, 255, 255, 235), ty.TRACK_MICRO)
 
     out_dir = "/influencer-automation-2.0/storage/verse_cards"
     os.makedirs(out_dir, exist_ok=True)

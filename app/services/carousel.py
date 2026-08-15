@@ -26,14 +26,12 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from app.config import config
 from app.services import wikimedia
-from app.services.verse_card import FONT_REF, FONT_VERSE, _cover, _draw_tracked, _fit_font
+from app.services import typography as ty
+from app.services.verse_card import _cover
 
 WIDTH, HEIGHT = 1080, 1350          # 4:5, the tallest ratio Instagram allows in feed
 MAX_SLIDES = 10                      # hard API limit for carousel children
-FONT_TITLE = "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"
-# The wordmark is deliberately the light cut, not the bold: it should sit
-# quietly on every slide, not compete with the photograph.
-FONT_MARK = "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"
+# Type roles come from typography.py; see that module for why these faces.
 
 OUT_DIR = "/influencer-automation-2.0/storage/carousels"
 
@@ -87,38 +85,37 @@ def _draw_furniture(img: Image.Image, location: Optional[str], credit: Optional[
     w, h = img.size
     draw = ImageDraw.Draw(img)
 
-    mark_size = int(w * 0.021)
-    small_size = int(w * 0.0155)
-    f_mark = ImageFont.truetype(FONT_MARK, mark_size)
-    f_small = ImageFont.truetype(FONT_VERSE, small_size)
+    mark_size = int(w * 0.026)      # serif needs more size than a sans to read
+    small_size = int(w * 0.0135)
+    f_mark = ty.font(ty.SERIF, mark_size, "Light")
+    f_small = ty.font(ty.SANS, small_size, "Light")
 
     # Wordmark and tagline swap ends between slides, as the reference does —
     # it keeps a long carousel from feeling like the same frame repeated.
     mark_y = int(h * 0.055) if mark_at_top else int(h * 0.905)
     tag_y = int(h * 0.90) if mark_at_top else int(h * 0.055)
 
-    mw = draw.textlength(wordmark(), font=f_mark)
-    draw.text(((w - mw) / 2, mark_y), wordmark(), font=f_mark, fill=(255, 255, 255, 235))
+    ty.draw_centered(draw, w, mark_y, wordmark(), f_mark, (255, 255, 255, 240),
+                     ty.TRACK_WORDMARK)
 
     t1, t2 = tagline()
     for i, line in enumerate([t1, t2]):
         if not line:
             continue
-        lw = draw.textlength(line, font=f_small)
-        draw.text(((w - lw) / 2, tag_y + i * int(small_size * 1.35)), line,
-                  font=f_small, fill=(255, 255, 255, 205))
+        ty.draw_centered(draw, w, tag_y + i * int(small_size * 1.6), line.upper(),
+                         f_small, (255, 255, 255, 200), ty.TRACK_MICRO)
 
     margin = int(w * 0.062)
     if location:
         for i, line in enumerate(location.split("\n")[:2]):
-            draw.text((margin, int(h * 0.845) + i * int(small_size * 1.3)), line,
-                      font=f_small, fill=(255, 255, 255, 225))
+            ty.draw_tracked(draw, (margin, int(h * 0.845) + i * int(small_size * 1.5)),
+                            line.upper(), f_small, (255, 255, 255, 230), ty.TRACK_MICRO)
     if credit:
         # CC BY requires attribution; keep it discreet but present on-slide.
-        f_credit = ImageFont.truetype(FONT_VERSE, int(w * 0.0125))
-        cw = draw.textlength(credit, font=f_credit)
-        draw.text((w - margin - cw, int(h * 0.862)), credit, font=f_credit,
-                  fill=(255, 255, 255, 150))
+        f_credit = ty.font(ty.SANS, int(w * 0.0105), "Regular")
+        cw = ty.width(draw, credit, f_credit, ty.TRACK_MICRO)
+        ty.draw_tracked(draw, (w - margin - cw, int(h * 0.868)), credit, f_credit,
+                        (255, 255, 255, 145), ty.TRACK_MICRO)
     return img
 
 
@@ -134,16 +131,15 @@ def _cover_slide(photo_img: Image.Image, title: str) -> Image.Image:
 
     draw = ImageDraw.Draw(img)
     max_w = int(WIDTH * 0.90)
-    font, lines = _fit_font(draw, title, FONT_TITLE, max_w, int(HEIGHT * 0.26),
-                            start=int(WIDTH * 0.070), min_size=int(WIDTH * 0.038),
-                            line_ratio=1.14)
-    line_h = int(font.size * 1.16)
+    fnt, lines = ty.fit(draw, title, ty.DISPLAY, max_w, int(HEIGHT * 0.27),
+                        start=int(WIDTH * 0.068), min_size=int(WIDTH * 0.036),
+                        instance="Bold", tracking=ty.TRACK_TITLE, leading=ty.LEAD_TITLE)
+    line_h = int(fnt.size * ty.LEAD_TITLE)
     y = int(HEIGHT * 0.50) - (len(lines) * line_h) // 2
     for line in lines:
-        lw = draw.textlength(line, font=font)
-        # A soft shadow keeps the title readable over bright sky.
-        draw.text(((WIDTH - lw) / 2 + 2, y + 2), line, font=font, fill=(0, 0, 0, 120))
-        draw.text(((WIDTH - lw) / 2, y), line, font=font, fill=(255, 255, 255))
+        # No drop shadow: the scrim already guarantees contrast, and a hard
+        # offset shadow is the fastest way to make display type look cheap.
+        ty.draw_centered(draw, WIDTH, y, line, fnt, (255, 255, 255), ty.TRACK_TITLE)
         y += line_h
     return img
 
