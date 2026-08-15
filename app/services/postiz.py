@@ -7,6 +7,7 @@ scheduled Postiz post. It never logs API keys or full upload URLs.
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import re
@@ -106,6 +107,19 @@ class PostizService:
         )
         self.daily_post_cap = max(0, _cfg_int("postiz_daily_post_cap", 8))
         self.post_type = str(config.app.get("postiz_post_type", "post") or "post").strip()
+        # Per-type daily quotas, so one content type cannot consume the whole
+        # allowance. postiz_daily_post_cap remains the global ceiling on top.
+        #
+        # These are counted from a LOCAL ledger, not from Postiz: the public
+        # posts API returns no settings/media, so a post's type cannot be
+        # recovered from it. We are the only publisher, so our own record is
+        # authoritative for our own posts; anything published by hand still
+        # counts against the global cap, which is queried live.
+        self.type_quotas = {
+            "reel": max(0, _cfg_int("postiz_daily_quota_reel", 1)),
+            "post": max(0, _cfg_int("postiz_daily_quota_post", 1)),
+            "story": max(0, _cfg_int("postiz_daily_quota_story", 2)),
+        }
 
     def is_api_configured(self) -> bool:
         return bool(self.enabled and self.base_url and self.api_key)
@@ -292,6 +306,48 @@ class PostizService:
                 dates.append(published_at)
         return sorted(dates)
 
+    # --- local per-type publish ledger ------------------------------------
+
+    @staticmethod
+    def _publish_log_path() -> str:
+        d = "/influencer-automation-2.0/storage/postiz"
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, "publish_log.json")
+
+    @classmethod
+    def _load_publish_log(cls) -> list[dict]:
+        try:
+            with open(cls._publish_log_path(), encoding="utf-8") as fh:
+                data = json.load(fh)
+            return data if isinstance(data, list) else []
+        except (OSError, ValueError):
+            return []
+
+    @classmethod
+    def _record_publish(cls, kind: str, publish_at: datetime) -> None:
+        entries = cls._load_publish_log()
+        entries.append({"kind": kind, "date": publish_at.astimezone(timezone.utc).date().isoformat(),
+                        "at": _utc_iso(publish_at)})
+        # 120 days is plenty for a daily quota and keeps the file small.
+        cutoff = (datetime.now(timezone.utc).date() - timedelta(days=120)).isoformat()
+        entries = [e for e in entries if str(e.get("date", "")) >= cutoff]
+        try:
+            with open(cls._publish_log_path(), "w", encoding="utf-8") as fh:
+                json.dump(entries, fh)
+        except OSError as exc:
+            logger.warning(f"could not persist publish log: {exc}")
+
+    @classmethod
+    def _count_kind_on(cls, kind: str, day) -> int:
+        target = day.isoformat() if hasattr(day, "isoformat") else str(day)
+        return sum(1 for e in cls._load_publish_log()
+                   if e.get("kind") == kind and str(e.get("date")) == target)
+
+    def quota_for(self, kind: Optional[str]) -> Optional[int]:
+        if not kind:
+            return None
+        return self.type_quotas.get(kind)
+
     def _with_jitter(self, candidate: datetime, now: datetime) -> datetime:
         if self.schedule_jitter_minutes > 0:
             offset = random.randint(
@@ -301,10 +357,19 @@ class PostizService:
             candidate = candidate + timedelta(minutes=offset)
         return max(candidate, now + _MIN_SCHEDULE_LEAD)
 
-    def select_publish_at(self, now: Optional[datetime] = None) -> dict:
-        """Compute the next future schedule time while enforcing local caps."""
+    def select_publish_at(self, now: Optional[datetime] = None,
+                          kind: Optional[str] = None) -> dict:
+        """Compute the next future schedule time while enforcing local caps.
+
+        `kind` ('reel' | 'post' | 'story') additionally enforces that type's
+        daily quota, so verse cards cannot eat the Reel's slot and vice versa.
+        Omitting it keeps the previous behaviour (global cap only).
+        """
         if self.daily_post_cap <= 0:
             return self._failure("postiz_daily_post_cap is zero")
+        type_quota = self.quota_for(kind)
+        if type_quota is not None and type_quota <= 0:
+            return self._failure(f"postiz_daily_quota_{kind} is zero")
 
         integration = self.get_configured_integration()
         if not integration.get("success"):
@@ -325,6 +390,18 @@ class PostizService:
 
         for _ in range(_POST_LOOKAHEAD_DAYS):
             same_day = [dt for dt in existing if dt.date() == candidate.date()]
+            # Per-type quota, counted from our own ledger (see __init__).
+            if type_quota is not None and self._count_kind_on(kind, candidate.date()) >= type_quota:
+                logger.info(
+                    f"{kind} quota ({type_quota}/day) reached for {candidate.date()}; "
+                    "rolling to the next day"
+                )
+                candidate = datetime.combine(
+                    candidate.date() + timedelta(days=1),
+                    time.min,
+                    tzinfo=timezone.utc,
+                ) + timedelta(hours=self.schedule_interval_hours)
+                continue
             if len(same_day) >= self.daily_post_cap:
                 candidate = datetime.combine(
                     candidate.date() + timedelta(days=1),
@@ -350,6 +427,7 @@ class PostizService:
         publish_at: datetime,
         *,
         integration: Optional[dict] = None,
+        kind: Optional[str] = None,
     ) -> dict:
         caption = (caption or "").strip()
         if not caption:
@@ -418,15 +496,19 @@ class PostizService:
         ).strip()
         if not post_id:
             return self._failure("Postiz create post response did not include postId")
+        # Record against the per-type quota only once the post really exists.
+        if kind:
+            self._record_publish(kind, publish_at)
         logger.info(
             "Postiz post scheduled: "
             f"post_id={post_id}, integration_id={self.integration_id}, "
-            f"publish_at={_utc_iso(publish_at)}"
+            f"kind={kind or 'unspecified'}, publish_at={_utc_iso(publish_at)}"
         )
         return {
             "success": True,
             "post_id": post_id,
             "integration_id": self.integration_id,
+            "kind": kind,
             "publish_at": _utc_iso(publish_at),
         }
 
@@ -449,7 +531,9 @@ class PostizService:
             return integration
 
         if publish_at is None:
-            selected = self.select_publish_at(now=now)
+            # Video posts are Reels; count them against the reel quota so verse
+            # cards and stories cannot consume the day's video slot.
+            selected = self.select_publish_at(now=now, kind="reel")
             if not selected.get("success"):
                 return selected
             publish_at = selected["publish_at"]
@@ -462,6 +546,7 @@ class PostizService:
             caption,
             publish_at,
             integration=integration["integration"],
+            kind="reel",
         )
         if not scheduled.get("success"):
             return scheduled

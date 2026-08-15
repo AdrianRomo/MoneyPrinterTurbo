@@ -478,20 +478,22 @@ def publish_card(card: dict, publish_at=None) -> dict:
     from app.services.postiz import PostizService
 
     svc = PostizService()
+    kind = "story" if card.get("kind") == "story" else "post"
     # post_type drives Instagram's media_type: 'story' -> STORIES, else a feed post.
-    svc.post_type = "story" if card.get("kind") == "story" else "post"
+    svc.post_type = kind
 
     integration = svc.get_configured_integration()
     if not integration.get("success"):
         return integration
     if publish_at is None:
-        selected = svc.select_publish_at()
+        # kind enforces this type's daily quota as well as the global cap.
+        selected = svc.select_publish_at(kind=kind)
         if not selected.get("success"):
             return selected
-        publish_at = selected.get("date") or selected.get("publish_at")
+        publish_at = selected.get("publish_at") or selected.get("date")
 
     upload = svc.upload_media(card["path"])
     if not upload.get("success"):
         return upload
     return svc.schedule_post(upload["media"], card["caption"], publish_at,
-                             integration=integration["integration"])
+                             integration=integration["integration"], kind=kind)
