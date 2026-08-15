@@ -38,16 +38,38 @@ OUT_DIR = "/influencer-automation-2.0/storage/carousels"
 # Subject -> (title noun, Commons search terms). Keeping the search terms
 # explicit avoids drifting into categories with poor or irrelevant imagery.
 SUBJECTS = {
-    "mountains":  ("MOUNTAINS",      "mountain landscape peak"),
-    "auroras":    ("THE AURORAS",    "aurora borealis"),
-    "sunsets":    ("THE SUNSET",     "sunset clouds sky"),
-    "oceans":     ("THE OCEAN",      "ocean coast sea waves"),
-    "forests":    ("THE FORESTS",    "forest trees woodland"),
-    "deserts":    ("THE DESERT",     "desert dunes landscape"),
-    "rivers":     ("THE RIVERS",     "river valley waterfall"),
-    "storms":     ("THE STORM",      "storm clouds lightning sky"),
-    "glaciers":   ("THE ICE",        "glacier iceberg arctic"),
-    "night_sky":  ("THE NIGHT SKY",  "milky way night sky stars"),
+    "mountains":    ("MOUNTAINS",       "mountain landscape peak"),
+    "auroras":      ("THE AURORAS",     "aurora borealis"),
+    "sunsets":      ("THE SUNSET",      "sunset clouds sky"),
+    "oceans":       ("THE OCEAN",       "ocean coast sea waves"),
+    "forests":      ("THE FORESTS",     "forest trees woodland"),
+    "deserts":      ("THE DESERT",      "desert dunes landscape"),
+    "rivers":       ("THE RIVERS",      "river valley"),
+    "storms":       ("THE STORM",       "storm clouds lightning sky"),
+    "glaciers":     ("THE ICE",         "glacier iceberg arctic"),
+    "night_sky":    ("THE NIGHT SKY",   "milky way night sky stars"),
+    "waterfalls":   ("WATERFALLS",      "waterfall cascade"),
+    "canyons":      ("CANYONS",         "canyon gorge cliffs"),
+    "volcanoes":    ("VOLCANOES",       "volcano crater lava"),
+    "lakes":        ("LAKES",           "lake reflection alpine"),
+    "islands":      ("ISLANDS",         "island coastline aerial"),
+    "caves":        ("CAVES",           "cave cavern limestone"),
+    "autumn":       ("AUTUMN",          "autumn foliage forest"),
+    "winter":       ("WINTER",          "snow winter landscape"),
+    "wildflowers":  ("WILDFLOWERS",     "wildflower meadow bloom"),
+    "fjords":       ("THE FJORDS",      "fjord landscape"),
+    "rainforest":   ("THE RAINFOREST",  "rainforest jungle canopy"),
+    "clouds":       ("THE CLOUDS",      "clouds sky formation"),
+    "mist":         ("THE MIST",        "fog mist landscape morning"),
+    "reefs":        ("CORAL REEFS",     "coral reef underwater"),
+    "savanna":      ("THE SAVANNA",     "savanna grassland plain"),
+    "hot_springs":  ("HOT SPRINGS",     "hot spring geyser thermal"),
+    "salt_flats":   ("SALT FLATS",      "salt flat reflection"),
+    "the_moon":     ("THE MOON",        "moon lunar surface"),
+    "rain":         ("THE RAIN",        "rain droplets water nature"),
+    "tundra":       ("THE TUNDRA",      "tundra arctic landscape"),
+    "birds":        ("BIRDS IN FLIGHT", "birds flight flock nature"),
+    "ancient_trees":("ANCIENT TREES",   "ancient tree solitary oak"),
 }
 
 
@@ -144,6 +166,37 @@ def _cover_slide(photo_img: Image.Image, title: str) -> Image.Image:
     return img
 
 
+def _recent_subjects(limit: int = 12) -> list:
+    import json
+    try:
+        with open(os.path.join(OUT_DIR, "recent_subjects.json"), encoding="utf-8") as fh:
+            return list(json.load(fh))[-limit:]
+    except (OSError, ValueError):
+        return []
+
+
+def _remember_subject(subject: str, keep: int = 24) -> None:
+    import json
+    os.makedirs(OUT_DIR, exist_ok=True)
+    recent = [s for s in _recent_subjects(keep) if s != subject]
+    recent.append(subject)
+    try:
+        with open(os.path.join(OUT_DIR, "recent_subjects.json"), "w", encoding="utf-8") as fh:
+            json.dump(recent[-keep:], fh)
+    except OSError as exc:
+        logger.warning(f"could not persist recent subjects: {exc}")
+
+
+def choose_subject() -> str:
+    """Least-recently-used, so the pool is worked through before repeating."""
+    recent = _recent_subjects()
+    unused = [s for s in SUBJECTS if s not in recent]
+    if unused:
+        return random.choice(unused)
+    # Everything has been used recently: take the stalest.
+    return next((s for s in recent if s in SUBJECTS), random.choice(list(SUBJECTS)))
+
+
 def _used_photos_path() -> str:
     os.makedirs(OUT_DIR, exist_ok=True)
     return os.path.join(OUT_DIR, "used_photos.json")
@@ -172,7 +225,7 @@ def _remember_photos(urls: list, keep: int = 300) -> None:
 def build(subject: Optional[str] = None, slides: int = 8,
           out_dir: str = OUT_DIR) -> Optional[dict]:
     """Build a carousel. Returns {paths, subject, title, photos, credits}."""
-    subject = subject if subject in SUBJECTS else random.choice(list(SUBJECTS))
+    subject = subject if subject in SUBJECTS else choose_subject()
     noun, query = SUBJECTS[subject]
     slides = max(3, min(slides, MAX_SLIDES))
 
@@ -231,6 +284,7 @@ def build(subject: Optional[str] = None, slides: int = 8,
     car = {"paths": paths, "subject": subject, "title": noun.title(),
            "photos": picked[:len(paths)], "credits": credits}
     _remember_photos([p.url for p in picked[:len(paths)]])
+    _remember_subject(subject)
     ok, reason = quality.check_carousel(car)
     quality.log_result("carousel", ok, reason)
     if not ok:
