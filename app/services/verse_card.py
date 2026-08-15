@@ -449,16 +449,16 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
 # --- 5. caption + publish ----------------------------------------------------
 
 
-def build_caption(verse: Verse, extra_hashtags: Optional[list[str]] = None) -> str:
-    tags = extra_hashtags or [
-        "#faith", "#bibleverse", "#scripture", "#dailydevotional",
-        "#christianencouragement", "#hope", "#faithintheordinary",
-    ]
-    return f"“{verse.text}”\n— {verse.reference} ({verse.translation})\n\n" + " ".join(tags)
+def build_caption(verse: Verse, set_id: Optional[str] = None) -> tuple[str, str]:
+    """Caption + the hashtag set used, so reach can be attributed to it later."""
+    from app.services import hashtags
+
+    return hashtags.build_caption(verse.text, verse.reference, verse.translation, set_id)
 
 
-def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = None) -> Optional[dict]:
-    """Full generation, no publishing. Returns {path, verse, caption}."""
+def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = None,
+                hashtag_set: Optional[str] = None) -> Optional[dict]:
+    """Full generation, no publishing. Returns {path, verse, caption, set_id}."""
     if kind not in ASPECTS:
         logger.error(f"unknown card kind: {kind}")
         return None
@@ -470,7 +470,8 @@ def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = No
         return None
     path = compose_card(bg, verse, kind=kind)
     _remember_reference(verse.reference)
-    return {"path": path, "verse": verse, "caption": build_caption(verse), "kind": kind}
+    caption, set_id = build_caption(verse, hashtag_set)
+    return {"path": path, "verse": verse, "caption": caption, "kind": kind, "set_id": set_id}
 
 
 def publish_card(card: dict, publish_at=None) -> dict:
@@ -495,5 +496,13 @@ def publish_card(card: dict, publish_at=None) -> dict:
     upload = svc.upload_media(card["path"])
     if not upload.get("success"):
         return upload
-    return svc.schedule_post(upload["media"], card["caption"], publish_at,
-                             integration=integration["integration"], kind=kind)
+    result = svc.schedule_post(upload["media"], card["caption"], publish_at,
+                               integration=integration["integration"], kind=kind,
+                               set_id=card.get("set_id"))
+    if result.get("success") and card.get("set_id"):
+        # Only mark the set as used once the post actually exists, so a failed
+        # publish does not skew the rotation.
+        from app.services import hashtags
+
+        hashtags.mark_used(card["set_id"])
+    return result

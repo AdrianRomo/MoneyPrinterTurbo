@@ -324,10 +324,15 @@ class PostizService:
             return []
 
     @classmethod
-    def _record_publish(cls, kind: str, publish_at: datetime) -> None:
+    def _record_publish(cls, kind: str, publish_at: datetime,
+                        set_id: Optional[str] = None,
+                        post_id: Optional[str] = None) -> None:
         entries = cls._load_publish_log()
         entries.append({"kind": kind, "date": publish_at.astimezone(timezone.utc).date().isoformat(),
-                        "at": _utc_iso(publish_at)})
+                        "at": _utc_iso(publish_at),
+                        # set_id/post_id let collect-insights.sh attribute reach
+                        # back to the hashtag set that was used.
+                        "set_id": set_id, "post_id": post_id})
         # 120 days is plenty for a daily quota and keeps the file small.
         cutoff = (datetime.now(timezone.utc).date() - timedelta(days=120)).isoformat()
         entries = [e for e in entries if str(e.get("date", "")) >= cutoff]
@@ -428,6 +433,7 @@ class PostizService:
         *,
         integration: Optional[dict] = None,
         kind: Optional[str] = None,
+        set_id: Optional[str] = None,
     ) -> dict:
         caption = (caption or "").strip()
         if not caption:
@@ -498,7 +504,7 @@ class PostizService:
             return self._failure("Postiz create post response did not include postId")
         # Record against the per-type quota only once the post really exists.
         if kind:
-            self._record_publish(kind, publish_at)
+            self._record_publish(kind, publish_at, set_id=set_id, post_id=post_id)
         logger.info(
             "Postiz post scheduled: "
             f"post_id={post_id}, integration_id={self.integration_id}, "
