@@ -340,7 +340,14 @@ def _publish(task_id: str, script) -> dict:
         if postiz.postiz_service.enabled or postiz.postiz_service.auto_schedule_enabled:
             if not postiz.postiz_service.is_auto_schedule_configured():
                 return {"success": False, "error": "Postiz auto-scheduling is not configured"}
-            result = postiz.schedule_video(videos[0], caption)
+            # Burn a hook into the opening seconds. Falls back to the
+            # untouched render on any failure, so this can never cost a post.
+            from app.services import reel_hook
+
+            hook_text = reel_hook.generate_hook(
+                getattr(cluster, "title", "") or script[:80], script)
+            video_for_post = reel_hook.add_hook(videos[0], hook_text)
+            result = postiz.schedule_video(video_for_post, caption)
             result["provider"] = "postiz"
             return result
 

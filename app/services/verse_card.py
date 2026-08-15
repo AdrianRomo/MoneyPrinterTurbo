@@ -362,8 +362,18 @@ def _draw_tracked(draw, xy, text: str, font, fill, tracking: float):
         x += draw.textlength(ch, font=font) + tracking
 
 
+def _feed_post_today() -> bool:
+    """Did a feed post go out today? Stories exist mainly to give it early
+    engagement velocity, which is what decides how far it travels."""
+    from datetime import datetime, timezone
+
+    from app.services.postiz import PostizService
+
+    return PostizService._count_kind_on("post", datetime.now(timezone.utc).date()) > 0
+
+
 def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
-                 out_path: Optional[str] = None) -> str:
+                 out_path: Optional[str] = None, point_at_post: bool = False) -> str:
     w, h = ASPECTS.get(kind, ASPECTS["post"])
     img = _cover(bg, w, h)
 
@@ -492,6 +502,11 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
     ty.draw_centered(draw, w, mark_y, _carousel.wordmark(), f_mark,
                      (255, 255, 255, 190), ty.TRACK_WORDMARK)
 
+    if point_at_post and kind == "story":
+        f_ptr = ty.font(ty.SANS, int(w * 0.016), "Medium")
+        ty.draw_centered(draw, w, int(h * 0.885), "NEW POST TODAY  ·  TAP THROUGH",
+                         f_ptr, (255, 255, 255, 225), ty.TRACK_MICRO)
+
     out_dir = "/influencer-automation-2.0/storage/verse_cards"
     os.makedirs(out_dir, exist_ok=True)
     if not out_path:
@@ -530,7 +545,8 @@ def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = No
         bg = generate_background(kind=kind, subject=subject)
         if bg is None:
             return None
-        path = compose_card(bg, verse, kind=kind)
+        path = compose_card(bg, verse, kind=kind,
+                            point_at_post=(kind == "story" and _feed_post_today()))
         if path:
             break
         logger.warning(f"card rejected on contrast; regenerating background ({attempt}/3)")
@@ -539,6 +555,8 @@ def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = No
         return None
     _remember_reference(verse.reference)
     caption, set_id = build_caption(verse, hashtag_set)
+    if kind == "story" and _feed_post_today():
+        caption = f"{caption}\n\nNew post on the grid today."
     return {"path": path, "verse": verse, "caption": caption, "kind": kind, "set_id": set_id}
 
 

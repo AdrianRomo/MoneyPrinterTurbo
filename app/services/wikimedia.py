@@ -126,11 +126,12 @@ def _parse_place(title: str) -> Optional[str]:
     return None
 
 
-def search(subject: str, limit: int = 24) -> list[Photo]:
+def search(subject: str, limit: int = 24, extra_pool: Optional[str] = None) -> list[Photo]:
     """Find high-quality, correctly-licensed photos for a subject."""
     out: list[Photo] = []
     seen: set[str] = set()
-    for pool in QUALITY_POOLS:
+    pools = ([extra_pool] if extra_pool else []) + QUALITY_POOLS
+    for pool in pools:
         if len(out) >= limit:
             break
         params = {

@@ -37,40 +37,94 @@ OUT_DIR = "/influencer-automation-2.0/storage/carousels"
 
 # Subject -> (title noun, Commons search terms). Keeping the search terms
 # explicit avoids drifting into categories with poor or irrelevant imagery.
+# subject -> (title noun, Commons query, extra pool, label_locations)
+#
+# label_locations is False for wildlife, space and macro detail: those titles
+# carry species names and camera metadata ("glaucidium sij", "magnif. ratio")
+# which parse as places and would print as a location. A landscape's title
+# usually does name a real place; a galaxy has no place at all.
 SUBJECTS = {
-    "mountains":    ("MOUNTAINS",       "mountain landscape peak"),
-    "auroras":      ("THE AURORAS",     "aurora borealis"),
-    "sunsets":      ("THE SUNSET",      "sunset clouds sky"),
-    "oceans":       ("THE OCEAN",       "ocean coast sea waves"),
-    "forests":      ("THE FORESTS",     "forest trees woodland"),
-    "deserts":      ("THE DESERT",      "desert dunes landscape"),
-    "rivers":       ("THE RIVERS",      "river valley"),
-    "storms":       ("THE STORM",       "storm clouds lightning sky"),
-    "glaciers":     ("THE ICE",         "glacier iceberg arctic"),
-    "night_sky":    ("THE NIGHT SKY",   "milky way night sky stars"),
-    "waterfalls":   ("WATERFALLS",      "waterfall cascade"),
-    "canyons":      ("CANYONS",         "canyon gorge cliffs"),
-    "volcanoes":    ("VOLCANOES",       "volcano crater lava"),
-    "lakes":        ("LAKES",           "lake reflection alpine"),
-    "islands":      ("ISLANDS",         "island coastline aerial"),
-    "caves":        ("CAVES",           "cave cavern limestone"),
-    "autumn":       ("AUTUMN",          "autumn foliage forest"),
-    "winter":       ("WINTER",          "snow winter landscape"),
-    "wildflowers":  ("WILDFLOWERS",     "wildflower meadow bloom"),
-    "fjords":       ("THE FJORDS",      "fjord landscape"),
-    "rainforest":   ("THE RAINFOREST",  "rainforest jungle canopy"),
-    "clouds":       ("THE CLOUDS",      "clouds sky formation"),
-    "mist":         ("THE MIST",        "fog mist landscape morning"),
-    "reefs":        ("CORAL REEFS",     "coral reef underwater"),
-    "savanna":      ("THE SAVANNA",     "savanna grassland plain"),
-    "hot_springs":  ("HOT SPRINGS",     "hot spring geyser thermal"),
-    "salt_flats":   ("SALT FLATS",      "salt flat reflection"),
-    "the_moon":     ("THE MOON",        "moon lunar surface"),
-    "rain":         ("THE RAIN",        "rain droplets water nature"),
-    "tundra":       ("THE TUNDRA",      "tundra arctic landscape"),
-    "birds":        ("BIRDS IN FLIGHT", "birds flight flock nature"),
-    "ancient_trees":("ANCIENT TREES",   "ancient tree solitary oak"),
+    # --- landscape ---
+    "mountains":    ("MOUNTAINS",       "mountain landscape peak", None, True),
+    "auroras":      ("THE AURORAS",     "aurora borealis", None, True),
+    "sunsets":      ("THE SUNSET",      "sunset clouds sky", None, True),
+    "oceans":       ("THE OCEAN",       "ocean coast sea waves", None, True),
+    "forests":      ("THE FORESTS",     "forest trees woodland", None, True),
+    "deserts":      ("THE DESERT",      "desert dunes landscape", None, True),
+    "rivers":       ("THE RIVERS",      "river valley", None, True),
+    "storms":       ("THE STORM",       "storm clouds lightning sky", None, True),
+    "glaciers":     ("THE ICE",         "glacier iceberg arctic", None, True),
+    "night_sky":    ("THE NIGHT SKY",   "milky way night sky stars", None, True),
+    "waterfalls":   ("WATERFALLS",      "waterfall cascade", None, True),
+    "canyons":      ("CANYONS",         "canyon gorge cliffs", None, True),
+    "volcanoes":    ("VOLCANOES",       "volcano crater lava", None, True),
+    "lakes":        ("LAKES",           "lake reflection alpine", None, True),
+    "islands":      ("ISLANDS",         "island coastline aerial", None, True),
+    "caves":        ("CAVES",           "cave cavern limestone", None, True),
+    "autumn":       ("AUTUMN",          "autumn foliage forest", None, True),
+    "winter":       ("WINTER",          "snow winter landscape", None, True),
+    "wildflowers":  ("WILDFLOWERS",     "wildflower meadow bloom", None, True),
+    "fjords":       ("THE FJORDS",      "fjord landscape", None, True),
+    "rainforest":   ("THE RAINFOREST",  "rainforest jungle canopy", None, True),
+    "clouds":       ("THE CLOUDS",      "clouds sky formation", None, True),
+    "mist":         ("THE MIST",        "fog mist landscape morning", None, True),
+    "savanna":      ("THE SAVANNA",     "savanna grassland plain", None, True),
+    "hot_springs":  ("HOT SPRINGS",     "hot spring geyser thermal", None, True),
+    "salt_flats":   ("SALT FLATS",      "salt flat reflection", None, True),
+    "rain":         ("THE RAIN",        "rain droplets water nature", None, True),
+    "tundra":       ("THE TUNDRA",      "tundra arctic landscape", None, True),
+    "ancient_trees":("ANCIENT TREES",   "ancient tree solitary oak", None, True),
+    # --- creatures ---
+    "birds":        ("BIRDS IN FLIGHT", "bird flight wings", None, False),
+    "whales":       ("THE WHALES",      "whale ocean breaching", None, False),
+    "butterflies":  ("BUTTERFLIES",     "butterfly wings", None, False),
+    "owls":         ("THE OWLS",        "owl perched", None, False),
+    "foxes":        ("THE FOXES",       "fox wildlife", None, False),
+    "deer":         ("THE DEER",        "deer forest wildlife", None, False),
+    "penguins":     ("THE PENGUINS",    "penguin antarctic", None, False),
+    "jellyfish":    ("JELLYFISH",       "jellyfish underwater", None, False),
+    "reefs":        ("CORAL REEFS",     "coral reef underwater fish", None, False),
+    "big_cats":     ("THE GREAT CATS",  "leopard tiger wildlife", None, False),
+    "elephants":    ("THE ELEPHANTS",   "elephant wildlife herd", None, False),
+    "horses":       ("THE HORSES",      "horse wild running", None, False),
+    "wolves":       ("THE WOLVES",      "wolf wildlife", None, False),
+    "hummingbirds": ("HUMMINGBIRDS",    "hummingbird flight flower", None, False),
+    "sea_turtles":  ("SEA TURTLES",     "sea turtle underwater", None, False),
+    "dragonflies":  ("DRAGONFLIES",     "dragonfly macro wings", None, False),
+    # --- the heavens ---
+    "galaxies":     ("THE GALAXIES",    "galaxy", "incategory:Featured_pictures_of_astronomy", False),
+    "nebulae":      ("THE NEBULAE",     "nebula", None, False),
+    "the_moon":     ("THE MOON",        "moon lunar surface", None, False),
+    "planets":      ("THE PLANETS",     "planet saturn jupiter", "incategory:Featured_pictures_of_astronomy", False),
+    "star_clusters":("THE STARS",       "star cluster globular", "incategory:Featured_pictures_of_astronomy", False),
+    "eclipses":     ("THE ECLIPSE",     "solar eclipse corona", None, False),
 }
+
+
+# The cover is the only slide most people see, so its shape rotates. A single
+# headline template is recognisable within about four posts and gets scrolled
+# past; numbers and questions keep the curiosity gap open.
+COVER_VARIANTS = [
+    "THE CREATIVITY OF GOD IN {noun}",
+    "{count} PLACES THAT LOOK PAINTED",
+    "DID GOD OVERDO IT WITH {noun}?",
+    "{noun}, AND NOTHING WE MADE",
+    "LOOK AT {noun}",
+]
+# Wildlife and space are not "places"; keep those variants off them.
+PLACE_ONLY_VARIANTS = {1}
+
+# Comments are the strongest ranking signal Instagram has. These are
+# deliberately answerable in two words — effort is what kills reply rates.
+QUESTIONS = [
+    "Which one would you stand in?",
+    "Which slide made you stop?",
+    "Save this for the day you need it — which one?",
+    "Where would you take this in?",
+    "Tag someone who needs to see slide 3.",
+]
+
+CTA_LINES = ("more of creation,", "twice a week")
 
 
 def _cfg(key: str, default: str) -> str:
@@ -222,14 +276,41 @@ def _remember_photos(urls: list, keep: int = 300) -> None:
         logger.warning(f"could not persist used photos: {exc}")
 
 
+def _cta_slide(photo_img: Image.Image) -> Image.Image:
+    """Closing slide. People who swiped this far are the warmest audience the
+    account will ever have, and until now they were shown a photo and nothing
+    to do."""
+    img = _cover(photo_img, WIDTH, HEIGHT)
+    img = ImageEnhance.Color(img).enhance(0.55)
+    img = img.filter(ImageFilter.GaussianBlur(radius=WIDTH * 0.012))
+    img = Image.alpha_composite(img.convert("RGBA"),
+                                Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 150))).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    f_lead = ty.font(ty.SERIF, int(WIDTH * 0.058), "Light")
+    y = int(HEIGHT * 0.40)
+    for line in CTA_LINES:
+        ty.draw_centered(draw, WIDTH, y, line, f_lead, (255, 255, 255, 240), 0.02)
+        y += int(f_lead.size * 1.28)
+
+    f_mark = ty.font(ty.DISPLAY, int(WIDTH * 0.052), "Bold")
+    ty.draw_centered(draw, WIDTH, y + int(HEIGHT * 0.035), wordmark().upper(), f_mark,
+                     (255, 255, 255), ty.TRACK_TITLE)
+
+    f_small = ty.font(ty.SANS, int(WIDTH * 0.017), "Light")
+    ty.draw_centered(draw, WIDTH, y + int(HEIGHT * 0.11), "FOLLOW FOR MORE", f_small,
+                     (255, 255, 255, 205), ty.TRACK_MICRO)
+    return img
+
+
 def build(subject: Optional[str] = None, slides: int = 8,
           out_dir: str = OUT_DIR) -> Optional[dict]:
     """Build a carousel. Returns {paths, subject, title, photos, credits}."""
     subject = subject if subject in SUBJECTS else choose_subject()
-    noun, query = SUBJECTS[subject]
+    noun, query, extra_pool, label_locations = SUBJECTS[subject]
     slides = max(3, min(slides, MAX_SLIDES))
 
-    found = wikimedia.search(query, limit=slides * 4)
+    found = wikimedia.search(query, limit=slides * 4, extra_pool=extra_pool)
     if len(found) < slides:
         logger.error(f"only {len(found)} usable photos for {subject!r}, need {slides}")
         return None
@@ -266,11 +347,16 @@ def build(subject: Optional[str] = None, slides: int = 8,
         if source is None:
             continue
         if index == 0:
-            slide = _cover_slide(source, f"THE CREATIVITY OF GOD IN {noun}")
+            choices = [v for i, v in enumerate(COVER_VARIANTS)
+                       if label_locations or i not in PLACE_ONLY_VARIANTS]
+            headline = random.choice(choices).format(noun=noun, count=slides - 1)
+            slide = _cover_slide(source, headline)
         else:
             slide = _cover(source, WIDTH, HEIGHT)
             slide = _furniture_scrim(slide)
-        slide = _draw_furniture(slide, photo.location, wikimedia.credit_line(photo),
+        slide = _draw_furniture(slide,
+                                photo.location if label_locations else None,
+                                wikimedia.credit_line(photo),
                                 mark_at_top=(index % 2 == 0))
         path = os.path.join(out_dir, f"{stamp}-{subject}-{index:02d}.jpg")
         slide.save(path, "JPEG", quality=91, optimize=True, progressive=True)
@@ -283,6 +369,14 @@ def build(subject: Optional[str] = None, slides: int = 8,
 
     car = {"paths": paths, "subject": subject, "title": noun.title(),
            "photos": picked[:len(paths)], "credits": credits}
+    # Closing CTA slide, built from the cover image so the set bookends.
+    if len(paths) >= 3:
+        closing = wikimedia.download(picked[0])
+        if closing is not None:
+            cta_path = os.path.join(out_dir, f"{stamp}-{subject}-zz-cta.jpg")
+            _cta_slide(closing).save(cta_path, "JPEG", quality=91, optimize=True)
+            paths.append(cta_path)
+
     _remember_photos([p.url for p in picked[:len(paths)]])
     _remember_subject(subject)
     ok, reason = quality.check_carousel(car)
@@ -340,6 +434,7 @@ def build_caption(car: dict) -> tuple[str, str]:
     parts = [lead, body]
     if note:
         parts.append(note)
+    parts.append(random.choice(QUESTIONS))
     parts.append(tags)
     return "\n\n".join(parts), set_id
 
