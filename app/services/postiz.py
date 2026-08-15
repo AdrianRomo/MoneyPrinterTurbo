@@ -367,6 +367,49 @@ class PostizService:
             return None
         return self.type_quotas.get(kind)
 
+    # --- publishing windows -------------------------------------------
+
+    def _utc_offset(self) -> int:
+        return _cfg_int("content_utc_offset_hours", -6)
+
+    def _window_for(self, kind: Optional[str]) -> Optional[tuple[float, float]]:
+        """Local-time window for a format, as 'HH:MM-HH:MM'.
+
+        Windows exist so posts land when the audience is actually awake, and so
+        the exact minute varies day to day. A fixed hour plus jitter still
+        clusters on the same minute; a uniform draw inside a window does not.
+        """
+        if not kind:
+            return None
+        raw = str(config.app.get(f"postiz_window_{kind}", "") or "").strip()
+        if not raw or "-" not in raw:
+            return None
+        try:
+            start, end = raw.split("-", 1)
+            sh, sm = (int(x) for x in start.strip().split(":"))
+            eh, em = (int(x) for x in end.strip().split(":"))
+        except (ValueError, TypeError):
+            logger.warning(f"unparsable postiz_window_{kind}: {raw!r}")
+            return None
+        return (sh + sm / 60.0, eh + em / 60.0)
+
+    def _window_slot(self, kind: str, on_date, now: datetime) -> Optional[datetime]:
+        """A uniform-random UTC instant inside that local window on that date."""
+        window = self._window_for(kind)
+        if not window:
+            return None
+        start_h, end_h = window
+        if end_h <= start_h:
+            return None
+        offset = self._utc_offset()
+        pick = random.uniform(start_h, end_h)
+        # local hour -> utc
+        slot = datetime.combine(on_date, time.min, tzinfo=timezone.utc) + timedelta(
+            hours=pick - offset)
+        if slot < now + _MIN_SCHEDULE_LEAD:
+            return None
+        return slot
+
     def _with_jitter(self, candidate: datetime, now: datetime) -> datetime:
         if self.schedule_jitter_minutes > 0:
             offset = random.randint(
@@ -395,6 +438,20 @@ class PostizService:
             return integration
 
         now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+
+        # Window mode: when a format has a configured window, that window IS the
+        # spacing, so the interval-based minimum does not apply — it would push
+        # a 06:30 card to 10:30 and out of its own window.
+        if self._window_for(kind):
+            for day_offset in range(_POST_LOOKAHEAD_DAYS):
+                on_date = (now + timedelta(days=day_offset)).date()
+                if type_quota is not None and self._count_kind_on(kind, on_date) >= type_quota:
+                    continue
+                slot = self._window_slot(kind, on_date, now)
+                if slot is not None:
+                    return {"success": True, "publish_at": slot}
+            return self._failure(f"no {kind} window available inside lookahead window")
+
         minimum_candidate = now + timedelta(hours=self.schedule_interval_hours)
         slot = self.find_available_slot()
         if not slot.get("success"):
