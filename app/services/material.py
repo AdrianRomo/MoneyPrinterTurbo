@@ -1406,6 +1406,12 @@ def search_images(
         return search_images_pixabay(search_term, video_aspect, per_page)
     if provider == "pexels":
         return search_images_pexels(search_term, video_aspect, per_page)
+    if provider == "comfyui":
+        # Generates on-brand frames locally instead of searching stock. See
+        # brand_footage.py for why stock cannot be steered safely here.
+        from app.services import brand_footage
+
+        return brand_footage.search_images_comfyui(search_term, video_aspect, per_page)
     logger.warning(f"unsupported image provider: {provider}")
     return []
 
@@ -1493,7 +1499,19 @@ def validate_image_file(image_path: str) -> tuple[int, int]:
 
 
 def save_image(image_url: str, save_dir: str = "") -> str:
-    """Download and validate a remote image. Returns the local path or ""."""
+    """Download and validate a remote image. Returns the local path or "".
+
+    Locally generated footage (see brand_footage.py) arrives as a path that
+    already exists, so it is validated and passed through rather than fetched.
+    """
+    if image_url and not image_url.startswith(("http://", "https://")) \
+            and os.path.exists(image_url):
+        try:
+            validate_image_file(image_url)
+            return image_url
+        except ValueError as exc:
+            logger.warning(f"generated frame failed validation: {exc}")
+            return ""
     if not save_dir:
         save_dir = utils.storage_dir("cache_images", create=True)
     os.makedirs(save_dir, exist_ok=True)
