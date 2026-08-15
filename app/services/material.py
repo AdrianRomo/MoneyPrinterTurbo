@@ -1682,8 +1682,26 @@ def select_scene_assets(
     search = searcher or _default_search
     chosen: List[MediaAsset] = []
     used_asset_keys: set = set()
+    # A generating provider produces a frame FOR each scene rather than finding
+    # candidates, so the search-shaped machinery below actively breaks it:
+    # relevance scoring compares stock metadata against the query and a
+    # generated frame can never match, while dedup discards the subject-cached
+    # frames two scenes in the same mood legitimately share. Both failures land
+    # a scene on the blank fallback. Half the scenes in the first Reel rendered
+    # black for exactly this reason.
+    generates_own = str(provider or "").strip().lower() == "comfyui" and searcher is None
     for beat_index, scene in enumerate(scenes):
         queries = _scene_search_queries(scene, entities)
+        if generates_own:
+            from app.services import brand_footage
+
+            asset = brand_footage.asset_for_scene(queries[0] if queries else "", beat_index)
+            if asset is not None:
+                asset.beat_index = beat_index
+                asset.illustrative = bool(getattr(scene, "is_contextual_visual", True))
+                asset.selection_reason = f"generated on-brand frame ({asset.metadata_text})"
+                chosen.append(asset)
+            continue
         best: MediaAsset | None = None
         best_score = -1.0
         for query in queries:

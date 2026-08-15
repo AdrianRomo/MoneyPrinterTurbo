@@ -133,6 +133,38 @@ def generate_frame(term: str, index: int = 0, save_dir: str = "") -> Optional[st
     return path
 
 
+def asset_for_scene(term: str, beat_index: int):
+    """One generated frame for one scene, guaranteed distinct per scene.
+
+    `beat_index` walks the mood's subject list and is part of the cache key, so
+    two scenes in the same mood get different pictures. This matters because the
+    generic selection path dedups by asset key: subject-cached frames shared
+    between scenes would be discarded as duplicates and the scene would fall
+    back to a blank background.
+    """
+    from app.models.article import MediaAsset
+
+    path = generate_frame(term, index=beat_index)
+    if not path:
+        return None
+    return MediaAsset(
+        media_type="image",
+        provider="comfyui",
+        url=path,
+        width=768,
+        height=1344,
+        asset_id=os.path.basename(path),
+        creator="",
+        metadata_text=subject_for(term, beat_index),
+        license_name="Locally generated (SDXL)",
+        license_url="",
+        attribution_text="",
+        source_page_url="",
+        search_query=term,
+        relevance_score=1.0,
+    )
+
+
 def search_images_comfyui(search_term: str, video_aspect=None,
                           per_page: int = 1) -> List["MediaAsset"]:
     """Provider-shaped entry point: generate rather than search.
