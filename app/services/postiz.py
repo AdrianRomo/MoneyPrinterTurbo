@@ -8,6 +8,7 @@ scheduled Postiz post. It never logs API keys or full upload URLs.
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import random
 import re
@@ -206,18 +207,30 @@ class PostizService:
         return self._failure(f"Postiz integration {self.integration_id} was not found")
 
     def upload_media(self, video_path: str) -> dict:
+        """Upload a media file. Works for video *and* images.
+
+        The content type must match the file: Postiz derives the stored
+        extension from the upload's mimetype, and its Instagram provider decides
+        between a video and a photo container by looking for '.mp4' in the
+        stored path. Sending a JPEG as video/mp4 therefore stores it as .mp4 and
+        Instagram tries to transcode a still image, failing with
+        "Invalid video duration: None".
+        """
         if not self.is_api_configured():
             return self._failure("Postiz API is not configured")
         if not video_path or not os.path.exists(video_path):
-            return self._failure(f"video file not found: {video_path}")
+            return self._failure(f"media file not found: {video_path}")
 
         try:
+            content_type = mimetypes.guess_type(video_path)[0]
+            if not content_type:
+                content_type = "video/mp4" if video_path.lower().endswith(".mp4") else "image/jpeg"
             with open(video_path, "rb") as video_file:
                 files = {
                     "file": (
                         os.path.basename(video_path),
                         video_file,
-                        "video/mp4",
+                        content_type,
                     )
                 }
                 response = requests.post(
