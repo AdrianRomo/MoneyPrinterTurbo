@@ -15,6 +15,28 @@ warnings.filterwarnings(
 )
 
 
+def _subtitle_cfg(key: str, default):
+    """Subtitle styling default, read from [app] first, then [ui].
+
+    These were hardcoded here while config.toml carried a full set of [app]
+    subtitle keys that NOTHING read — `grep` for config.app.get("font_name")
+    returned no hits in the whole tree. So the brand's subtitle styling silently
+    never applied and every render used the CJK fallback face, including Reels
+    on an English devotional account. Note that subtitle_position and
+    custom_position below already read config; the rest of the same block did
+    not, which is what made the gap easy to miss.
+
+    [app] wins over [ui] because [app] is the automation's configuration; the
+    WebUI sends explicit values per render, so this only sets its initial form
+    state.
+    """
+    for source in (config.app, config.ui):
+        value = source.get(key)
+        if value not in (None, ""):
+            return value
+    return default
+
+
 class VideoConcatMode(str, Enum):
     random = "random"
     sequential = "sequential"
@@ -107,16 +129,16 @@ class VideoParams(BaseModel):
     sonilo_bgm_prompt: str = Field(default="", max_length=2000)
 
     subtitle_enabled: Optional[bool] = True
-    subtitle_position: Optional[str] = config.ui.get("subtitle_position", "bottom")  # top, bottom, center, custom
-    custom_position: float = config.ui.get("custom_position", 70.0)
-    font_name: Optional[str] = "STHeitiMedium.ttc"
-    text_fore_color: Optional[str] = "#FFFFFF"
+    subtitle_position: Optional[str] = _subtitle_cfg("subtitle_position", "bottom")  # top, bottom, center, custom
+    custom_position: float = _subtitle_cfg("custom_position", 70.0)
+    font_name: Optional[str] = _subtitle_cfg("font_name", "STHeitiMedium.ttc")
+    text_fore_color: Optional[str] = _subtitle_cfg("text_fore_color", "#FFFFFF")
     text_background_color: Union[bool, str] = False
     rounded_subtitle_background: bool = False
 
-    font_size: int = 60
-    stroke_color: Optional[str] = "#000000"
-    stroke_width: float = 1.5
+    font_size: int = _subtitle_cfg("font_size", 60)
+    stroke_color: Optional[str] = _subtitle_cfg("stroke_color", "#000000")
+    stroke_width: float = _subtitle_cfg("stroke_width", 1.5)
     n_threads: Optional[int] = 2
     paragraph_number: int = Field(default=1, ge=1, le=10)
     video_script_prompt: str = Field(default="", max_length=2000)
@@ -154,14 +176,14 @@ class SubtitleRequest(BaseModel):
     bgm_type: Optional[str] = "random"
     bgm_file: Optional[str] = ""
     bgm_volume: Optional[float] = 0.2
-    subtitle_position: Optional[str] = config.ui.get("subtitle_position", "bottom")
-    font_name: Optional[str] = "STHeitiMedium.ttc"
-    text_fore_color: Optional[str] = "#FFFFFF"
+    subtitle_position: Optional[str] = _subtitle_cfg("subtitle_position", "bottom")
+    font_name: Optional[str] = _subtitle_cfg("font_name", "STHeitiMedium.ttc")
+    text_fore_color: Optional[str] = _subtitle_cfg("text_fore_color", "#FFFFFF")
     text_background_color: Union[bool, str] = False
     rounded_subtitle_background: bool = False
-    font_size: int = 60
-    stroke_color: Optional[str] = "#000000"
-    stroke_width: float = 1.5
+    font_size: int = _subtitle_cfg("font_size", 60)
+    stroke_color: Optional[str] = _subtitle_cfg("stroke_color", "#000000")
+    stroke_width: float = _subtitle_cfg("stroke_width", 1.5)
     video_source: Optional[str] = "local"
     subtitle_enabled: Optional[str] = "true"
 
