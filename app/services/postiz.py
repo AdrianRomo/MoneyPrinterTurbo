@@ -119,6 +119,7 @@ class PostizService:
             "reel": max(0, _cfg_int("postiz_daily_quota_reel", 1)),
             "post": max(0, _cfg_int("postiz_daily_quota_post", 1)),
             "story": max(0, _cfg_int("postiz_daily_quota_story", 2)),
+            "carousel": max(0, _cfg_int("postiz_daily_quota_carousel", 1)),
         }
 
     def is_api_configured(self) -> bool:
@@ -438,10 +439,21 @@ class PostizService:
         caption = (caption or "").strip()
         if not caption:
             return self._failure("caption is empty")
-        media_id = str((media or {}).get("id") or "").strip()
-        media_path = str((media or {}).get("path") or "").strip()
-        if not media_id or not media_path:
-            return self._failure("Postiz media id/path is missing")
+        # A list of media becomes a carousel: Postiz passes the children through
+        # to Instagram as media_type=CAROUSEL. Instagram caps carousels at 10.
+        items = media if isinstance(media, list) else [media]
+        images = []
+        for item in items:
+            item_id = str((item or {}).get("id") or "").strip()
+            item_path = str((item or {}).get("path") or "").strip()
+            if not item_id or not item_path:
+                return self._failure("Postiz media id/path is missing")
+            images.append({"id": item_id, "path": item_path})
+        if not images:
+            return self._failure("no media supplied")
+        if len(images) > 10:
+            logger.warning(f"carousel has {len(images)} items; Instagram allows 10 — truncating")
+            images = images[:10]
 
         if integration is None:
             integration_result = self.get_configured_integration()
@@ -459,7 +471,7 @@ class PostizService:
                     "value": [
                         {
                             "content": caption[:2200],
-                            "image": [{"id": media_id, "path": media_path}],
+                            "image": images,
                         }
                     ],
                     "settings": {
