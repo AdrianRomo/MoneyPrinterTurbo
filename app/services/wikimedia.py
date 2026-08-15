@@ -37,6 +37,17 @@ ALLOWED_LICENCES = re.compile(
     r"^(cc0|public domain|pd|cc by(?:-sa)? ?[0-9.]*|cc-by(?:-sa)?-[0-9.]+)$", re.I
 )
 
+# Words that parse like a place but are not one. Printing "unsplash" under a
+# photograph as though it were a location is exactly the class of error this
+# module exists to avoid.
+NON_PLACES = {
+    "unsplash", "pexels", "pixabay", "flickr", "wikimedia", "commons", "wikipedia",
+    "panorama", "panoramio", "hdr", "raw", "jpeg", "canon", "nikon", "sony", "fujifilm",
+    "camera", "lens", "drone", "dji", "gopro", "iphone", "author", "own work",
+    "creative commons", "public domain", "photo", "photograph", "image", "picture",
+    "featured", "quality image", "wallpaper", "stock",
+}
+
 MIN_WIDTH = 1800
 MIN_HEIGHT = 1200
 
@@ -64,12 +75,24 @@ def _plain(html: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", html or "")).strip()
 
 
-def _extract_location(title: str) -> Optional[str]:
+def _extract_location(title: str, object_name: str = "") -> Optional[str]:
     """Parse a place out of the file title, or return None.
 
     Grounded by construction: everything returned is a substring of the title.
     Nothing is inferred, so a slide can be unlabelled but never mislabelled.
     """
+    # Commons' ObjectName is often a cleaner caption than the filename, so try
+    # it first; both are the file's own metadata, so neither can invent a place.
+    for source in (object_name, title):
+        if not source:
+            continue
+        found = _parse_place(source)
+        if found:
+            return found
+    return None
+
+
+def _parse_place(title: str) -> Optional[str]:
     name = re.sub(r"\.(jpe?g|png|tiff?)$", "", title, flags=re.I)
     name = re.sub(r"^File:", "", name)
     # Commons titles often carry an ID prefix and a trailing credit.
@@ -93,7 +116,13 @@ def _extract_location(title: str) -> Optional[str]:
             continue
         if re.search(r"\d{3,}|\bmm\b|\bf/\d|\bISO\b", loc, re.I):
             continue
-        return loc.lower()
+        low = loc.lower()
+        if low in NON_PLACES or any(w in low.split() for w in NON_PLACES):
+            continue
+        # "by Pudelek" is a photographer credit, not a place.
+        if re.match(r"^(by|von|par|de|copyright|\(c\))\b", low):
+            continue
+        return low
     return None
 
 
@@ -146,7 +175,7 @@ def search(subject: str, limit: int = 24) -> list[Photo]:
                 height=info.get("height", 0),
                 author=field("Artist") or "Unknown",
                 licence=licence.strip(),
-                location=_extract_location(title),
+                location=_extract_location(title, field("ObjectName")),
                 descriptionurl=info.get("descriptionurl", ""),
             ))
             if len(out) >= limit:

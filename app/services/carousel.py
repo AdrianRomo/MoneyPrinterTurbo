@@ -144,6 +144,31 @@ def _cover_slide(photo_img: Image.Image, title: str) -> Image.Image:
     return img
 
 
+def _used_photos_path() -> str:
+    os.makedirs(OUT_DIR, exist_ok=True)
+    return os.path.join(OUT_DIR, "used_photos.json")
+
+
+def _recent_photo_urls(limit: int = 300) -> set:
+    try:
+        import json
+        with open(_used_photos_path(), encoding="utf-8") as fh:
+            return set(list(json.load(fh))[-limit:])
+    except (OSError, ValueError):
+        return set()
+
+
+def _remember_photos(urls: list, keep: int = 300) -> None:
+    import json
+    existing = [u for u in _recent_photo_urls(keep) if u]
+    existing.extend(u for u in urls if u not in existing)
+    try:
+        with open(_used_photos_path(), "w", encoding="utf-8") as fh:
+            json.dump(existing[-keep:], fh)
+    except OSError as exc:
+        logger.warning(f"could not persist used photos: {exc}")
+
+
 def build(subject: Optional[str] = None, slides: int = 8,
           out_dir: str = OUT_DIR) -> Optional[dict]:
     """Build a carousel. Returns {paths, subject, title, photos, credits}."""
@@ -156,7 +181,16 @@ def build(subject: Optional[str] = None, slides: int = 8,
         logger.error(f"only {len(found)} usable photos for {subject!r}, need {slides}")
         return None
 
-    # Spread across photographers so a carousel is not one person's portfolio.
+    # Spread across photographers so a carousel is not one person's portfolio,
+    # and skip anything used in a recent carousel — otherwise the same striking
+    # photograph reappears every few weeks.
+    seen_before = _recent_photo_urls()
+    fresh = [p for p in found if p.url not in seen_before]
+    if len(fresh) >= slides:
+        found = fresh
+    else:
+        logger.warning(f"only {len(fresh)} unseen photos for {subject!r}; allowing repeats")
+
     picked: list[wikimedia.Photo] = []
     per_author: dict[str, int] = {}
     for photo in found:
@@ -196,6 +230,7 @@ def build(subject: Optional[str] = None, slides: int = 8,
 
     car = {"paths": paths, "subject": subject, "title": noun.title(),
            "photos": picked[:len(paths)], "credits": credits}
+    _remember_photos([p.url for p in picked[:len(paths)]])
     ok, reason = quality.check_carousel(car)
     quality.log_result("carousel", ok, reason)
     if not ok:

@@ -681,6 +681,37 @@ def _strip_code_fence(text: str) -> str:
     return t.strip()
 
 
+
+# --- brand-fit filtering for stock footage ------------------------------------
+# Stock libraries answer "morning routine" with gym and wellness footage. On a
+# devotional account that is both off-brand and a modesty problem, so terms are
+# steered toward nature and everyday detail, and anything on the blocklist is
+# dropped before it ever reaches the stock search.
+
+_DEFAULT_TERM_BLOCKLIST = (
+    "bikini,swimsuit,swimwear,underwear,lingerie,sports bra,gym,workout,fitness,"
+    "exercise,yoga,pilates,model,sexy,sensual,nightclub,party,alcohol,beer,cocktail"
+)
+
+
+def _brand_terms_guidance() -> str:
+    return str(config.app.get("video_terms_guidance", "") or "").strip()
+
+
+def _filter_brand_terms(terms: list) -> list:
+    raw = str(config.app.get("video_terms_blocklist", _DEFAULT_TERM_BLOCKLIST) or "")
+    blocked = [w.strip().lower() for w in raw.split(",") if w.strip()]
+    kept = []
+    for term in terms:
+        low = (term or "").lower()
+        hit = next((w for w in blocked if w in low), None)
+        if hit:
+            logger.warning(f"dropped off-brand search term {term!r} (matched {hit!r})")
+            continue
+        kept.append(term)
+    return kept
+
+
 def generate_terms(
     video_subject: str,
     video_script: str,
@@ -765,6 +796,10 @@ Please note that you must use English for generating video search terms; Chinese
 
     logger.info(f"subject: {video_subject}, match_script_order: {match_script_order}")
 
+    guidance = _brand_terms_guidance()
+    if guidance:
+        prompt = f"{prompt}\n\nBrand direction (must be respected):\n{guidance}"
+
     search_terms = []
     response = ""
     for i in range(_max_retries):
@@ -803,7 +838,7 @@ Please note that you must use English for generating video search terms; Chinese
             logger.warning(f"failed to generate video terms, trying again... {i + 1}")
 
     logger.success(f"completed: \n{search_terms}")
-    return search_terms
+    return _filter_brand_terms(search_terms)
 
 
 # =============================================================================

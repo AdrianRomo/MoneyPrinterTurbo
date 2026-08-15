@@ -76,6 +76,24 @@ BACKGROUND_SUBJECTS = [
     "still river winding through autumn woodland",
     "desert dunes under a soft dawn sky",
     "snowfall over silent evergreen trees",
+    "rain on a window with soft daylight behind",
+    "a narrow country path between hedgerows at dusk",
+    "olive trees on a hillside in warm afternoon light",
+    "low tide on a wide empty beach under pale sky",
+    "morning fog rolling through a shallow valley",
+    "wildflowers in a field under an overcast sky",
+    "sunlight through cathedral of tall birch trees",
+    "a calm harbour at first light, no boats moving",
+    "frost on bare branches in blue morning light",
+    "clouds building over a wide open plain",
+    "a mountain stream over smooth stones",
+    "tall grass bending in coastal wind",
+    "an empty wooden bench beside still water",
+    "warm lamplight through a rain-streaked window",
+    "sun setting behind distant rolling hills",
+    "a quiet forest floor covered in fallen leaves",
+    "moonlight over a calm sea",
+    "first snow settling on a quiet field",
 ]
 STYLE_SUFFIX = (
     "photographic, natural light, shallow depth of field, muted warm tones, "
@@ -463,6 +481,16 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
     quality.log_result("card", ok, reason)
     if not ok:
         return ""   # caller regenerates with a different background
+
+    # Wordmark — the same discreet mark the carousels carry, so cards and
+    # carousels read as one account on the profile grid.
+    from app.services import carousel as _carousel
+
+    mark_size = int(w * 0.019)
+    f_mark = ty.font(ty.SERIF, mark_size, "Light")
+    mark_y = int(h * (0.915 if kind == "post" else 0.845))
+    ty.draw_centered(draw, w, mark_y, _carousel.wordmark(), f_mark,
+                     (255, 255, 255, 190), ty.TRACK_WORDMARK)
 
     out_dir = "/influencer-automation-2.0/storage/verse_cards"
     os.makedirs(out_dir, exist_ok=True)
