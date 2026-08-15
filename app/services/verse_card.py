@@ -34,7 +34,7 @@ from loguru import logger
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from app.config import config
-from app.services import typography as ty
+from app.services import quality, typography as ty
 
 # --- constants ---------------------------------------------------------------
 
@@ -384,24 +384,48 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
     # Adaptive scrim: measure what is actually behind the text and darken only
     # as much as needed for white type to stay comfortably readable. A fixed
     # opacity either muddies dark images or fails on bright ones.
-    lum = _mean_luminance(img, (side, block_top, w - side, block_top + block_h))
-    target = 0.34
-    alpha = 0 if lum <= target else int(255 * (lum - target) / max(lum, 1e-6))
-    # Cap it: past ~165 the photograph stops reading as a photograph. A bright
-    # background is better solved by softening than by drowning it.
-    alpha = max(70, min(165, alpha))
+    # Measure the background *under the glyphs*, not across the whole band: a
+    # card can be bright overall and still perfectly legible because the type
+    # sits over the dark part of the photograph. Render the text to a mask
+    # first, then darken exactly as much as those pixels need.
+    mask = Image.new("L", (w, h), 0)
+    mdraw = ImageDraw.Draw(mask)
+    my = block_top
+    for line in lines:
+        lw = ty.width(mdraw, line, font_v)
+        mdraw.text(((w - lw) / 2, my), line, font=font_v, fill=255)
+        my += line_h
+
+    lum = quality.luminance_under(img, mask)
+    alpha = quality.alpha_for_target(lum) if lum is not None else 110
+    # Floor keeps type separated from texture even over an already-dark photo;
+    # ceiling stops the photograph being drowned.
+    alpha = max(70, min(205, alpha))
 
     # The scrim is anchored to the text block and falls off within roughly one
     # block-height either side, so the top and bottom of the frame keep their
     # colour. An earlier version feathered across h/2 and turned bright images
     # into grey wash.
-    centre = block_top + block_h / 2
-    reach = max(block_h * 1.15, h * 0.22)
+    # Full strength across the whole text block, feathering only outside it.
+    # A centre-anchored gradient under-darkens the first and last lines, so the
+    # measured contrast never reaches what alpha_for_target computed.
+    pad = int(font_v.size * 0.35)          # ascenders/descenders overshoot the block
+    top, bottom = block_top - pad, block_top + block_h + pad
+    # Half the darkening is applied to the whole frame and half is eased in over
+    # the text, on a long smoothstep falloff. Applying it all as a band — even a
+    # feathered one — leaves a visible grey bar across the photograph.
+    base = alpha * 0.5
+    boost = alpha - base
+    feather = max(int(h * 0.28), int(block_h * 0.8))
     overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     od = ImageDraw.Draw(overlay)
     for y in range(h):
-        d = min(1.0, abs(y - centre) / reach)
-        a = int(alpha * (1.0 - d) ** 1.9)
+        if top <= y <= bottom:
+            ease = 1.0
+        else:
+            t = min(1.0, (top - y if y < top else y - bottom) / feather)
+            ease = 1.0 - (3 * t * t - 2 * t * t * t)   # smoothstep
+        a = int(base + boost * ease)
         if a > 0:
             od.line([(0, y), (w, y)], fill=(0, 0, 0, a))
     img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
@@ -412,6 +436,11 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
     ImageDraw.Draw(vign).ellipse((-w * 0.30, -h * 0.20, w * 1.30, h * 1.20), fill=255)
     vign = vign.filter(ImageFilter.GaussianBlur(radius=w * 0.10)).point(lambda v: 200 + v * 55 // 255)
     img = Image.composite(img, Image.new("RGB", (w, h), (0, 0, 0)), vign)
+
+    # Measure now: once the white type is drawn, sampling the glyph mask would
+    # be reading the letters themselves, not the background behind them.
+    final_lum = quality.luminance_under(img, mask)
+
     draw = ImageDraw.Draw(img)
 
     # Verse — centred, generous leading.
@@ -429,6 +458,11 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
     ref_text = f"{verse.reference}  ·  {verse.translation}".upper()
     ty.draw_centered(draw, w, rule_y + int(rule_gap * 0.42), ref_text, font_r,
                      (255, 255, 255, 235), ty.TRACK_MICRO)
+
+    ok, reason = quality.check_card(final_lum)
+    quality.log_result("card", ok, reason)
+    if not ok:
+        return ""   # caller regenerates with a different background
 
     out_dir = "/influencer-automation-2.0/storage/verse_cards"
     os.makedirs(out_dir, exist_ok=True)
@@ -461,10 +495,20 @@ def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = No
     verse = select_verse(theme)
     if not verse:
         return None
-    bg = generate_background(kind=kind, subject=subject)
-    if bg is None:
+    # A rejected card means the background was too bright under the type even
+    # after darkening; a different background is cheaper than a bad post.
+    path = ""
+    for attempt in range(1, 4):
+        bg = generate_background(kind=kind, subject=subject)
+        if bg is None:
+            return None
+        path = compose_card(bg, verse, kind=kind)
+        if path:
+            break
+        logger.warning(f"card rejected on contrast; regenerating background ({attempt}/3)")
+    if not path:
+        logger.error("could not produce a legible card after 3 backgrounds")
         return None
-    path = compose_card(bg, verse, kind=kind)
     _remember_reference(verse.reference)
     caption, set_id = build_caption(verse, hashtag_set)
     return {"path": path, "verse": verse, "caption": caption, "kind": kind, "set_id": set_id}

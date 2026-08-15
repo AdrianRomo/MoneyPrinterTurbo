@@ -26,7 +26,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from app.config import config
 from app.services import wikimedia
-from app.services import typography as ty
+from app.services import quality, typography as ty
 from app.services.verse_card import _cover
 
 WIDTH, HEIGHT = 1080, 1350          # 4:5, the tallest ratio Instagram allows in feed
@@ -194,9 +194,14 @@ def build(subject: Optional[str] = None, slides: int = 8,
         logger.error("too few slides rendered")
         return None
 
+    car = {"paths": paths, "subject": subject, "title": noun.title(),
+           "photos": picked[:len(paths)], "credits": credits}
+    ok, reason = quality.check_carousel(car)
+    quality.log_result("carousel", ok, reason)
+    if not ok:
+        return None
     logger.info(f"carousel built: {len(paths)} slides for {subject}")
-    return {"paths": paths, "subject": subject, "title": noun.title(),
-            "photos": picked[:len(paths)], "credits": credits}
+    return car
 
 
 def science_note(subject: str) -> str:
