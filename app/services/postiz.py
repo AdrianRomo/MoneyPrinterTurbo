@@ -482,8 +482,14 @@ class PostizService:
         # postiz_daily_post_cap, documented as the hard stop a runaway loop
         # cannot exceed, was in practice enforcing nothing at all.
         if self._window_for(kind):
+            # From the START of today, not from `now`: the API returns posts in
+            # the window given, so listing from `now` sees only what is still
+            # scheduled and counts everything already published today as zero.
+            # The cap is a daily budget — what has gone out already is exactly
+            # what it has to count.
+            window_start = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
             window_end = now + timedelta(days=_POST_LOOKAHEAD_DAYS)
-            scheduled = self.list_posts(now, window_end)
+            scheduled = self.list_posts(window_start, window_end)
             if not scheduled.get("success"):
                 return scheduled
             existing = self._posts_for_integration(scheduled["posts"])

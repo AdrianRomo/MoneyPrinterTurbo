@@ -435,7 +435,8 @@ def _draw_tracked(draw, xy, text: str, font, fill, tracking: float):
 
 
 def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
-                 out_path: Optional[str] = None, point_at_post: bool = False) -> str:
+                 out_path: Optional[str] = None, point_at_post: bool = False,
+                 series_label: Optional[str] = None) -> str:
     w, h = ASPECTS.get(kind, ASPECTS["post"])
     img = _cover(bg, w, h)
 
@@ -569,6 +570,15 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
         ty.draw_centered(draw, w, int(h * 0.885), "NEW POST TODAY  ·  TAP THROUGH",
                          f_ptr, (255, 255, 255, 225), ty.TRACK_MICRO)
 
+    # Series line, above the verse block: it is a label, not part of the
+    # scripture, and putting it at the top stops it reading as a citation.
+    # Dimmer than the reference so the verse still leads the eye.
+    if series_label:
+        f_series = ty.font(ty.SANS, int(w * 0.0155), "Medium")
+        series_y = int(h * (0.085 if kind == "post" else 0.145))
+        ty.draw_centered(draw, w, series_y, series_label.upper(), f_series,
+                         (255, 255, 255, 170), ty.TRACK_MICRO)
+
     out_dir = "/influencer-automation-2.0/storage/verse_cards"
     os.makedirs(out_dir, exist_ok=True)
     if not out_path:
@@ -592,12 +602,25 @@ def build_caption(verse: Verse, set_id: Optional[str] = None) -> tuple[str, str]
 
 
 def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = None,
-                hashtag_set: Optional[str] = None) -> Optional[dict]:
-    """Full generation, no publishing. Returns {path, verse, caption, set_id}."""
+                hashtag_set: Optional[str] = None,
+                reference: Optional[str] = None,
+                series_label: Optional[str] = None) -> Optional[dict]:
+    """Full generation, no publishing. Returns {path, verse, caption, set_id}.
+
+    `reference` pins the verse instead of asking the LLM to propose one (used by
+    the series runs). It is still fetched from the bible API and rendered
+    verbatim — pinning removes the LLM from the choice, not the verification.
+    """
     if kind not in ASPECTS:
         logger.error(f"unknown card kind: {kind}")
         return None
-    verse = select_verse(theme)
+    if reference:
+        verse = fetch_verse(reference)
+        if not verse:
+            logger.error(f"series reference could not be fetched: {reference!r}")
+            return None
+    else:
+        verse = select_verse(theme)
     if not verse:
         return None
     # A rejected card means the background was too bright under the type even
@@ -614,7 +637,7 @@ def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = No
         # scheduled into the next day, so it could promise "new post today" on a
         # morning with no post. The twin cannot drift that way: it is built from
         # the card it points at.
-        path = compose_card(bg, verse, kind=kind)
+        path = compose_card(bg, verse, kind=kind, series_label=series_label)
         if path:
             break
         logger.warning(f"card rejected on contrast; regenerating background ({attempt}/3)")
@@ -623,9 +646,14 @@ def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = No
         return None
     _remember_reference(verse.reference)
     caption, set_id = build_caption(verse, hashtag_set)
+    if series_label:
+        # The first line of a caption is what Instagram indexes for search, so
+        # the series name leads rather than trailing after the verse.
+        caption = f"{series_label}\n\n{caption}"
     if kind == "post" and bg is not None:
         _remember_todays_post(verse, bg, set_id)
-    return {"path": path, "verse": verse, "caption": caption, "kind": kind, "set_id": set_id}
+    return {"path": path, "verse": verse, "caption": caption, "kind": kind,
+            "set_id": set_id, "series_label": series_label}
 
 
 def create_story_from_todays_post() -> Optional[dict]:

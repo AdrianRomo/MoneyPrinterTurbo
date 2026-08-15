@@ -105,6 +105,7 @@ def produce(kind: str) -> dict:
     import random
 
     from app.services import carousel as ca
+    from app.services import series
     from app.services import verse_card as vc
 
     if kind == "carousel":
@@ -123,6 +124,26 @@ def produce(kind: str) -> dict:
             if result.get("success"):
                 vc.mark_twin_done()
             return result
+
+    # Feed cards run as a SERIES, not a random theme. A one-off card earns a
+    # save; a numbered run earns a follow, because tomorrow is part 4 of
+    # something someone already started. Stories stay themed and standalone —
+    # they expire in a day, so continuity there buys nothing.
+    if kind == "post":
+        part = series.current()
+        if part:
+            card = vc.create_card(kind="post", subject=part["subject"],
+                                  reference=part["reference"],
+                                  series_label=series.label(part))
+            if not card:
+                return {"success": False, "error": "series card generation failed"}
+            result = vc.publish_card(card)
+            # Advance only on a real publish, so a failed render retries the
+            # same part rather than silently skipping it.
+            if result.get("success"):
+                series.advance(part["series_id"])
+            return result
+        logger.warning("no series defined; falling back to a random theme")
 
     theme = random.choice(STORY_THEMES if kind == "story" else POST_THEMES)
     card = vc.create_card(kind="story" if kind == "story" else "post", theme=theme)
