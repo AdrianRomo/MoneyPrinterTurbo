@@ -155,6 +155,78 @@ def _remember_reference(reference: str, keep: int = 400) -> None:
         logger.warning(f"could not persist used reference: {exc}")
 
 
+def _todays_post_path() -> str:
+    return os.path.join(os.path.dirname(_state_path()), "todays_post.json")
+
+
+def _remember_todays_post(verse: Verse, bg: Image.Image, set_id: Optional[str]) -> None:
+    """Keep the day's feed card so its story twin can reuse verse and background.
+
+    Instagram's Content Publishing API cannot re-share a feed post to a story —
+    the native share, the one with the tap-through sticker, is app-only. So the
+    story has to be published as its own media, and rebuilding it from the same
+    verse over the same background is what makes a viewer read the two as one
+    post rather than two unrelated cards.
+    """
+    from datetime import datetime, timezone
+
+    bg_path = os.path.join(os.path.dirname(_state_path()), "todays_post_bg.jpg")
+    try:
+        bg.save(bg_path, "JPEG", quality=95, optimize=True)
+        with open(_todays_post_path(), "w", encoding="utf-8") as fh:
+            json.dump({
+                "date": datetime.now(timezone.utc).date().isoformat(),
+                "reference": verse.reference,
+                "text": verse.text,
+                "translation": verse.translation,
+                "set_id": set_id,
+                "bg_path": bg_path,
+            }, fh)
+    except (OSError, ValueError) as exc:
+        logger.warning(f"could not persist today's feed card: {exc}")
+
+
+def load_todays_post() -> Optional[dict]:
+    """The feed card generated today (UTC), or None. Quota days are UTC."""
+    from datetime import datetime, timezone
+
+    try:
+        with open(_todays_post_path(), encoding="utf-8") as fh:
+            record = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if record.get("date") != datetime.now(timezone.utc).date().isoformat():
+        return None
+    if not os.path.exists(str(record.get("bg_path", ""))):
+        return None
+    return record
+
+
+def twin_pending() -> bool:
+    """Is today's feed card still waiting for its story twin?
+
+    Deliberately not 'is this the first story of the day': a story left over
+    from a previous day's roll-forward can occupy the first slot, and the twin
+    would then be skipped on the one day it matters. The twin is defined by
+    pairing with the feed card, not by ordering.
+    """
+    record = load_todays_post()
+    return bool(record) and not record.get("twin_done")
+
+
+def mark_twin_done() -> None:
+    """Record that today's twin exists, so later runs publish standalone stories."""
+    record = load_todays_post()
+    if not record:
+        return
+    record["twin_done"] = True
+    try:
+        with open(_todays_post_path(), "w", encoding="utf-8") as fh:
+            json.dump(record, fh)
+    except OSError as exc:
+        logger.warning(f"could not mark today's twin as done: {exc}")
+
+
 # --- 1. reference selection (LLM proposes, API verifies) ---------------------
 
 _REF_RE = re.compile(r"^([1-3]\s*)?[A-Za-z][A-Za-z ]{1,20}\s+\d{1,3}:\d{1,3}(-\d{1,3})?$")
@@ -362,16 +434,6 @@ def _draw_tracked(draw, xy, text: str, font, fill, tracking: float):
         x += draw.textlength(ch, font=font) + tracking
 
 
-def _feed_post_today() -> bool:
-    """Did a feed post go out today? Stories exist mainly to give it early
-    engagement velocity, which is what decides how far it travels."""
-    from datetime import datetime, timezone
-
-    from app.services.postiz import PostizService
-
-    return PostizService._count_kind_on("post", datetime.now(timezone.utc).date()) > 0
-
-
 def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
                  out_path: Optional[str] = None, point_at_post: bool = False) -> str:
     w, h = ASPECTS.get(kind, ASPECTS["post"])
@@ -541,12 +603,18 @@ def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = No
     # A rejected card means the background was too bright under the type even
     # after darkening; a different background is cheaper than a bad post.
     path = ""
+    bg = None
     for attempt in range(1, 4):
         bg = generate_background(kind=kind, subject=subject)
         if bg is None:
             return None
-        path = compose_card(bg, verse, kind=kind,
-                            point_at_post=(kind == "story" and _feed_post_today()))
+        # Only the twin points at the feed post — see create_story_from_todays_post.
+        # This used to fire on any story generated on a day a post went out, but
+        # the pointer was decided at GENERATION time while the story can be
+        # scheduled into the next day, so it could promise "new post today" on a
+        # morning with no post. The twin cannot drift that way: it is built from
+        # the card it points at.
+        path = compose_card(bg, verse, kind=kind)
         if path:
             break
         logger.warning(f"card rejected on contrast; regenerating background ({attempt}/3)")
@@ -555,9 +623,42 @@ def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = No
         return None
     _remember_reference(verse.reference)
     caption, set_id = build_caption(verse, hashtag_set)
-    if kind == "story" and _feed_post_today():
-        caption = f"{caption}\n\nNew post on the grid today."
+    if kind == "post" and bg is not None:
+        _remember_todays_post(verse, bg, set_id)
     return {"path": path, "verse": verse, "caption": caption, "kind": kind, "set_id": set_id}
+
+
+def create_story_from_todays_post() -> Optional[dict]:
+    """The story twin of today's feed card: same verse, same background, at 9:16.
+
+    Returns None when there is no feed card today, or when the story crop fails
+    the contrast gate — the caller then falls back to an independent story, so a
+    bad crop costs variety rather than the whole slot.
+    """
+    record = load_todays_post()
+    if not record:
+        return None
+    try:
+        bg = Image.open(record["bg_path"]).convert("RGB")
+    except (OSError, ValueError, KeyError) as exc:
+        logger.warning(f"could not reopen today's background: {exc}")
+        return None
+    verse = Verse(reference=record["reference"], text=record["text"],
+                  translation=record["translation"])
+    # The background cleared the gate at 4:5; the 9:16 crop samples different
+    # pixels, so it is measured again rather than assumed.
+    path = compose_card(bg, verse, kind="story", point_at_post=True)
+    if not path:
+        logger.warning("story twin rejected on contrast; falling back to a fresh story")
+        return None
+    # Deliberately NOT reusing the post's hashtag set: insights attribute reach
+    # per set, and scoring one set with both a feed post and a story on the same
+    # day would bias the rotation with numbers the two surfaces do not share.
+    caption, set_id = build_caption(verse, None)
+    caption = f"{caption}\n\nNew post on the grid today."
+    logger.info(f"story twin of today's feed card: {verse.reference}")
+    return {"path": path, "verse": verse, "caption": caption, "kind": "story",
+            "set_id": set_id, "twin_of_post": True}
 
 
 def publish_card(card: dict, publish_at=None) -> dict:

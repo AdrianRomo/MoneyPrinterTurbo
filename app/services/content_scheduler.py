@@ -37,16 +37,18 @@ from app.services.postiz import PostizService
 # postiz_daily_quota_<kind>. The time of day comes from the publishing windows
 # in postiz.py (postiz_window_<kind>), not from here.
 #
-# Only one story a day, and deliberately so: stories are shown mainly to people
-# who already follow you, so on a young account they are a retention surface,
-# not a discovery one. Reels and carousels are what actually grow reach, so they
-# get the slots.
+# Three stories a day: the first is the story twin of the day's feed card
+# (same verse, same background, pointing at the post), published just after it
+# to give it early engagement velocity; the other two stand alone.
+#
+# One window per story, not one window shared by three — see _windows_for in
+# postiz.py. The scheduler produces at most one item per kind per run, so three
+# stories need three runs, and by the second run a single shared window is
+# mostly in the past.
 PLAN = {
     "post":     {"per_day": 1},
-    "story":    {"per_day": 1},
-    # Every other day, and Sunday counts double: faith audiences are markedly
-    # more active on Sundays, and carousels reward unhurried scrolling.
-    "carousel": {"per_day": 1, "min_interval_days": 2, "sunday_interval_days": 1},
+    "story":    {"per_day": 3},
+    "carousel": {"per_day": 1},
 }
 
 STORY_THEMES = ["peace and rest", "trust in the everyday", "gratitude",
@@ -110,6 +112,17 @@ def produce(kind: str) -> dict:
         if not car:
             return {"success": False, "error": "carousel build failed"}
         return ca.publish(car)
+
+    # One story a day is the twin of the feed card, so the two read as one post.
+    # PLAN runs 'post' before 'story', so within a single run the card already
+    # exists by the time we get here. The other stories stand alone.
+    if kind == "story" and vc.twin_pending():
+        twin = vc.create_story_from_todays_post()
+        if twin:
+            result = vc.publish_card(twin)
+            if result.get("success"):
+                vc.mark_twin_done()
+            return result
 
     theme = random.choice(STORY_THEMES if kind == "story" else POST_THEMES)
     card = vc.create_card(kind="story" if kind == "story" else "post", theme=theme)
