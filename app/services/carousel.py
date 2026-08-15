@@ -199,6 +199,37 @@ def build(subject: Optional[str] = None, slides: int = 8,
             "photos": picked[:len(paths)], "credits": credits}
 
 
+def science_note(subject: str) -> str:
+    """A short, plain explanation of the phenomenon.
+
+    The wonder-plus-science pairing is what makes this format work: the image
+    carries the awe, the caption gives people something to learn and pass on.
+
+    Deliberately asks for qualitative description and no statistics — a wrong
+    figure is the kind of error a comment section corrects in public, and this
+    text is LLM-written and unverified.
+    """
+    from app.services import llm
+
+    prompt = (
+        f"Write 2-3 short sentences explaining, in plain everyday English, how {subject} "
+        "form or occur in nature. Be accurate and general. Do NOT include any numbers, "
+        "statistics, dates, measurements or place names. No preamble, no title, no "
+        "hashtags — just the sentences."
+    )
+    try:
+        text = (llm._generate_response(prompt) or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"science note failed: {exc}")
+        return ""
+    text = " ".join(text.split())
+    # Guard against the model ignoring the no-numbers instruction.
+    if re.search(r"\d", text):
+        logger.warning("science note contained figures; dropping it rather than risk a wrong one")
+        return ""
+    return text[:600]
+
+
 def build_caption(car: dict) -> tuple[str, str]:
     from app.services import hashtags
 
@@ -206,11 +237,17 @@ def build_caption(car: dict) -> tuple[str, str]:
     lead = f"The creativity of God in {car['title'].lower()}"
     body = ("Creation keeps saying something we did not invent. "
             "Swipe through and let it slow you down for a minute.")
-    # CC BY obliges us to name the photographers; Commons is named as the source.
-    credit_block = "Photos via Wikimedia Commons — " + "; ".join(
-        c.split(" — ", 1)[1] for c in car["credits"][:10])
+    note = science_note(car["subject"].replace("_", " "))
     tags = " ".join(hashtags.tags_for(set_id))
-    return f"{lead}\n\n{body}\n\n{credit_block}\n\n{tags}", set_id
+
+    # No credit block here by choice: CC BY attribution is satisfied on-slide,
+    # where every photographer is named beside their own image. Dropping the
+    # caption list keeps it readable without breaching a licence.
+    parts = [lead, body]
+    if note:
+        parts.append(note)
+    parts.append(tags)
+    return "\n\n".join(parts), set_id
 
 
 def publish(car: dict, publish_at=None) -> dict:
