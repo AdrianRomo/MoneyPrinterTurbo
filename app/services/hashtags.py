@@ -110,13 +110,21 @@ def set_scores() -> dict[str, dict]:
     grouped: dict[str, list[float]] = {}
     for s in samples:
         sid = s.get("set_id")
-        if sid in SETS and isinstance(s.get("metrics"), dict):
+        if sid in _sets() and isinstance(s.get("metrics"), dict):
             grouped.setdefault(sid, []).append(score_of(s["metrics"]))
     return {sid: {"samples": len(v), "mean_score": sum(v) / len(v)} for sid, v in grouped.items() if v}
 
 
+def _sets() -> dict:
+    """Hashtag sets, from the pack if it defines any."""
+    from app.services import pack
+
+    return pack.typed("hashtags.sets", SETS)
+
+
 def choose_set(explicit: Optional[str] = None) -> str:
-    if explicit and explicit in SETS:
+    sets = _sets()
+    if explicit and explicit in sets:
         return explicit
 
     scores = set_scores()
@@ -133,12 +141,12 @@ def choose_set(explicit: Optional[str] = None) -> str:
     # Explore — or no data yet. Prefer whatever has been used least recently, so
     # early rotation is even rather than random-clumped.
     recent = _load("recent.json", [])
-    unused = [s for s in SETS if s not in recent]
+    unused = [s for s in sets if s not in recent]
     if unused:
         choice = random.choice(unused)
     else:
         # recent is most-recent-last; the front of the list is the stalest.
-        choice = next((s for s in recent if s in SETS), random.choice(list(SETS)))
+        choice = next((s for s in recent if s in sets), random.choice(list(sets)))
     logger.info(f"hashtag set '{choice}' chosen by rotation ({'no data yet' if not eligible else 'explore'})")
     return choice
 
@@ -150,7 +158,7 @@ def mark_used(set_id: str, keep: int = 6) -> None:
 
 
 def tags_for(set_id: str) -> list[str]:
-    return list(SETS.get(set_id, {}).get("tags", []))
+    return list(_sets().get(set_id, {}).get("tags", []))
 
 
 def record_sample(set_id: str, media_id: str, metrics: dict,
@@ -467,18 +475,21 @@ def build_caption(verse_text: str, reference: str, translation: str,
 
     `reflect=False` skips the model call for callers that cannot afford it.
     """
+    from app.services import pack
+
     set_id = choose_set(set_id)
-    leads = KEYWORD_LEADS.get(set_id) or ["Bible verse of the day"]
+    leads = (pack.typed("captions.keyword_leads", KEYWORD_LEADS).get(set_id)
+             or ["Bible verse of the day"])
     lead = rotate(f"lead:{set_id}", leads)
     note = reflection(verse_text, reference) if reflect else ""
     if not note:
-        note = rotate("reflection", REFLECTION_FALLBACKS)
+        note = rotate("reflection", pack.typed("captions.reflection_fallbacks", REFLECTION_FALLBACKS))
     blocks = [
         f"{lead} — {reference}",
         f"“{verse_text}”\n— {reference} ({translation.upper()})",
         note,
-        rotate("question", QUESTIONS),
-        rotate("save_ask", SAVE_ASKS),
+        rotate("question", pack.typed("captions.questions", QUESTIONS)),
+        rotate("save_ask", pack.typed("captions.save_asks", SAVE_ASKS)),
         " ".join(tags_for(set_id)),
     ]
     return "\n\n".join(b for b in blocks if b), set_id

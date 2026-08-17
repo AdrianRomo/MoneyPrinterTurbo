@@ -92,6 +92,34 @@ QUOTE_REEL_THEMES = [
 CAROUSEL_SUBJECTS: list = []
 
 
+def cadence() -> dict:
+    """The format mix, from the pack if it defines one.
+
+    Note this is only half the ceiling: due() takes
+    min(per_day, postiz_daily_quota_<kind>), so a pack raising per_day without
+    the matching config key changes nothing. Same trap the runbook records from
+    2026-08-15.
+    """
+    from app.services import pack
+
+    packed = pack.typed("cadence", PLAN)
+    out = {}
+    for kind, spec in packed.items():
+        if kind not in PLAN:
+            logger.warning(f"pack cadence names unknown format {kind!r}; ignoring it")
+            continue
+        try:
+            out[kind] = {"per_day": max(0, int(spec["per_day"]))}
+        except (KeyError, TypeError, ValueError):
+            logger.warning(f"pack cadence for {kind!r} is malformed; using the default")
+            out[kind] = dict(PLAN[kind])
+    return out or dict(PLAN)
+
+
+def plan_for(kind: str) -> dict:
+    return cadence().get(kind, PLAN[kind])
+
+
 def _cfg_int(key: str, default: int) -> int:
     try:
         return int(config.app.get(key, default))
@@ -158,7 +186,7 @@ def due(kind: str, now_utc: datetime, svc: PostizService) -> tuple[bool, str]:
     if not enabled:
         return False, enabled_reason
 
-    plan = PLAN[kind]
+    plan = plan_for(kind)
     target = min(plan["per_day"], svc.type_quotas.get(kind, 0))
     if target <= 0:
         return False, f"{kind} quota is zero"
@@ -218,10 +246,10 @@ def produce(kind: str) -> dict:
         subjects = [
             subject
             for subject in _cfg_list("content_scheduler_carousel_subjects", CAROUSEL_SUBJECTS)
-            if subject in ca.SUBJECTS
+            if subject in ca.subjects()
         ]
         if not subjects:
-            subjects = list(ca.SUBJECTS)
+            subjects = list(ca.subjects())
         # Least-recently-used, NOT shuffled. A shuffle has no memory, so the
         # same handful of subjects kept winning and the account published
         # "the creativity of God in mountains" three times over.
@@ -239,7 +267,9 @@ def produce(kind: str) -> dict:
         }
 
     if kind == "reel":
-        subject = random.choice(QUOTE_REEL_THEMES)
+        from app.services import pack
+
+        subject = random.choice(pack.typed("themes.quote_reel", QUOTE_REEL_THEMES))
         task_id = f"scheduled-quote-reel-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
         result = quote_reel.render_quote_reel(
             task_id,
@@ -300,7 +330,11 @@ def produce(kind: str) -> dict:
             return result
         logger.warning("no series defined; falling back to a random theme")
 
-    theme = random.choice(STORY_THEMES if kind == "story" else POST_THEMES)
+    from app.services import pack
+
+    theme = random.choice(
+        pack.typed("themes.story", STORY_THEMES) if kind == "story"
+        else pack.typed("themes.post", POST_THEMES))
     card = vc.create_card(kind="story" if kind == "story" else "post", theme=theme)
     if not card:
         return {"success": False, "error": f"{kind} generation failed"}

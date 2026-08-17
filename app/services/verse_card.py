@@ -154,6 +154,31 @@ def _comfy_url() -> str:
     return str(_cfg("comfyui_base_url", "http://192.168.0.135:8188")).rstrip("/")
 
 
+def background_subjects() -> list:
+    """Background vocabulary, from the pack if it defines one."""
+    from app.services import pack
+
+    return pack.typed("verse_card.background_subjects", BACKGROUND_SUBJECTS)
+
+
+def style_suffix() -> str:
+    from app.services import pack
+
+    return pack.value("verse_card.style_suffix", STYLE_SUFFIX)
+
+
+def negative_prompt() -> str:
+    """The unpeopled guarantee.
+
+    Overridable because a non-faith account has different things to exclude —
+    but note brand_motion leans on this being tuned and trusted, so a pack that
+    weakens it weakens the Reel imagery guarantee too.
+    """
+    from app.services import pack
+
+    return pack.value("verse_card.negative_prompt", NEGATIVE_PROMPT)
+
+
 def _preferred_chars() -> int:
     """Preferred verse length at SELECTION time (see select_verse).
 
@@ -565,7 +590,8 @@ def _workflow(prompt: str, width: int, height: int, seed: int, ckpt: str,
         "5": {"class_type": "EmptyLatentImage",
               "inputs": {"width": width, "height": height, "batch_size": 1}},
         "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["4", 1]}},
-        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": NEGATIVE_PROMPT, "clip": ["4", 1]}},
+        "7": {"class_type": "CLIPTextEncode",
+              "inputs": {"text": negative_prompt(), "clip": ["4", 1]}},
         "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
         "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "versecard"}},
     }
@@ -592,8 +618,8 @@ def generate_background(kind: str = "post", subject: Optional[str] = None,
     base = _comfy_url()
     width, height = SDXL_BUCKET.get(kind, SDXL_BUCKET["post"])
     hires = hires_size((width, height), ASPECTS.get(kind, ASPECTS["post"]))
-    subject = subject or random.choice(BACKGROUND_SUBJECTS)
-    prompt = f"{subject}, {STYLE_SUFFIX}"
+    subject = subject or random.choice(background_subjects())
+    prompt = f"{subject}, {style_suffix()}"
     seed = seed if seed is not None else random.randint(1, 2**31 - 1)
     ckpt = str(_cfg("comfyui_checkpoint", "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"))
 

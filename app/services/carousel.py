@@ -302,17 +302,55 @@ CTA_LINES = ("keep this one", "for a slower morning")
 CTA_MICRO = "SAVE  ·  SHARE  ·  FOLLOW"
 
 
+def subjects() -> dict:
+    """Subject vocabulary, from the pack if it defines one.
+
+    Pack form is a mapping so it is readable and diffable; the code wants the
+    same 4-tuple SUBJECTS has always been. A malformed entry is skipped rather
+    than allowed to fail inside build().
+    """
+    from app.services import pack
+
+    raw = pack.value("carousel.subjects")
+    if not isinstance(raw, dict):
+        return SUBJECTS
+    out = {}
+    for key, spec in raw.items():
+        if not isinstance(spec, dict) or not spec.get("query"):
+            logger.warning(f"pack subject {key!r} is malformed; skipping it")
+            continue
+        out[key] = (str(spec.get("noun") or key.replace("_", " ").upper()),
+                    str(spec["query"]),
+                    spec.get("pool") or None,
+                    bool(spec.get("label_locations", False)))
+    return out or SUBJECTS
+
+
 def _cfg(key: str, default: str) -> str:
     value = config.app.get(key, default)
     return default if value in (None, "") else str(value)
 
 
 def wordmark() -> str:
-    return _cfg("brand_wordmark", "holy ordinary")
+    """config.toml wins over the pack, which wins over the built-in default.
+
+    config stays on top because it is the per-deployment override — a staging
+    account running the same pack must be able to differ without editing it.
+    """
+    from app.services import pack
+
+    return _cfg("brand_wordmark", pack.value("brand.wordmark", "holy ordinary"))
 
 
 def tagline() -> tuple[str, str]:
-    raw = _cfg("brand_tagline", "creation × wonder")
+    from app.services import pack
+
+    packed = pack.value("brand.tagline")
+    if isinstance(packed, (list, tuple)) and len(packed) == 2:
+        default = f"{packed[0]} {packed[1]}".replace("× ", "× ")
+    else:
+        default = "creation × wonder"
+    raw = _cfg("brand_tagline", default)
     parts = [p.strip() for p in re.split(r"[×x]", raw, maxsplit=1)]
     return (parts[0], "× " + parts[1]) if len(parts) == 2 else (raw, "")
 
@@ -459,7 +497,8 @@ def rank_subjects(pool: Optional[list] = None) -> list:
     through the whole pool before any topic comes round again — the account had
     published `mountains` three times while 45 subjects had never run once.
     """
-    candidates = [s for s in (pool if pool is not None else SUBJECTS) if s in SUBJECTS]
+    known = subjects()
+    candidates = [s for s in (pool if pool is not None else known) if s in known]
     history = _recent_subjects()
     last_used = {subject: i for i, subject in enumerate(history)}
     unused = [s for s in candidates if s not in last_used]
@@ -471,7 +510,7 @@ def rank_subjects(pool: Optional[list] = None) -> list:
 def choose_subject() -> str:
     """Least-recently-used, so the pool is worked through before repeating."""
     ranked = rank_subjects()
-    return ranked[0] if ranked else random.choice(list(SUBJECTS))
+    return ranked[0] if ranked else random.choice(list(known))
 
 
 def _used_photos_path() -> str:
@@ -518,7 +557,9 @@ def _cta_slide(photo_img: Image.Image) -> Image.Image:
 
     f_lead = ty.font(ty.SERIF, int(WIDTH * 0.058), "Light")
     y = int(HEIGHT * 0.40)
-    for line in CTA_LINES:
+    from app.services import pack as _pack
+
+    for line in _pack.typed("carousel.cta_lines", list(CTA_LINES)):
         ty.draw_centered(draw, WIDTH, y, line, f_lead, (255, 255, 255, 240), 0.02)
         y += int(f_lead.size * 1.28)
 
@@ -527,7 +568,8 @@ def _cta_slide(photo_img: Image.Image) -> Image.Image:
                      (255, 255, 255), ty.TRACK_TITLE)
 
     f_small = ty.font(ty.SANS, int(WIDTH * 0.017), "Light")
-    ty.draw_centered(draw, WIDTH, y + int(HEIGHT * 0.11), CTA_MICRO, f_small,
+    ty.draw_centered(draw, WIDTH, y + int(HEIGHT * 0.11),
+                     _pack.value("carousel.cta_micro", CTA_MICRO), f_small,
                      (255, 255, 255, 205), ty.TRACK_MICRO)
     return img
 
@@ -535,8 +577,9 @@ def _cta_slide(photo_img: Image.Image) -> Image.Image:
 def build(subject: Optional[str] = None, slides: int = 8,
           out_dir: str = OUT_DIR) -> Optional[dict]:
     """Build a carousel. Returns {paths, subject, title, photos, credits}."""
-    subject = subject if subject in SUBJECTS else choose_subject()
-    noun, query, extra_pool, label_locations = SUBJECTS[subject]
+    known = subjects()
+    subject = subject if subject in known else choose_subject()
+    noun, query, extra_pool, label_locations = known[subject]
     slides = max(3, min(slides, MAX_SLIDES))
 
     found = wikimedia.search(query, limit=slides * 4, extra_pool=extra_pool)
@@ -600,8 +643,13 @@ def build(subject: Optional[str] = None, slides: int = 8,
         if index == 0:
             from app.services import hashtags as _hashtags
 
-            choices = [v for i, v in enumerate(COVER_VARIANTS)
-                       if label_locations or i not in PLACE_ONLY_VARIANTS]
+            from app.services import pack as _pack
+
+            variants = _pack.typed("carousel.cover_variants", COVER_VARIANTS)
+            place_only = set(_pack.typed("carousel.place_only_variants",
+                                         sorted(PLACE_ONLY_VARIANTS)))
+            choices = [v for i, v in enumerate(variants)
+                       if label_locations or i not in place_only]
             # Least-recently-used rather than random.choice: the cover is the one
             # slide most people ever see, and a uniform draw over six templates
             # repeats within a couple of posts.
@@ -714,15 +762,18 @@ SAVE_ASKS = [
 
 
 def build_caption(car: dict) -> tuple[str, str]:
-    from app.services import hashtags
+    from app.services import hashtags, pack
 
     set_id = hashtags.choose_set()
     noun = car["title"].lower()
-    lead = hashtags.rotate("carousel_lead", CAPTION_LEADS).format(noun=noun)
+    lead = hashtags.rotate("carousel_lead",
+                           pack.typed("carousel.caption_leads", CAPTION_LEADS)
+                           ).format(noun=noun)
     # Templates that OPEN with {noun} would otherwise start the caption — and so
     # the whole post — on a lowercase letter.
     lead = lead[:1].upper() + lead[1:]
-    body = hashtags.rotate("carousel_body", CAPTION_BODIES)
+    body = hashtags.rotate("carousel_body",
+                           pack.typed("carousel.caption_bodies", CAPTION_BODIES))
     note = science_note(car["subject"].replace("_", " "))
     tags = " ".join(hashtags.tags_for(set_id))
 
@@ -732,8 +783,10 @@ def build_caption(car: dict) -> tuple[str, str]:
     parts = [lead, body]
     if note:
         parts.append(note)
-    parts.append(hashtags.rotate("carousel_question", QUESTIONS))
-    parts.append(hashtags.rotate("carousel_save", SAVE_ASKS))
+    parts.append(hashtags.rotate("carousel_question",
+                                 pack.typed("carousel.questions", QUESTIONS)))
+    parts.append(hashtags.rotate("carousel_save",
+                                 pack.typed("carousel.save_asks", SAVE_ASKS)))
     parts.append(tags)
     return "\n\n".join(parts), set_id
 
