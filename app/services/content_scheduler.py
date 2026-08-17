@@ -72,25 +72,11 @@ QUOTE_REEL_THEMES = [
     "God's nearness in daily life",
     "gratitude for small things",
 ]
-CAROUSEL_SUBJECTS = [
-    "mountains",
-    "auroras",
-    "sunsets",
-    "oceans",
-    "forests",
-    "deserts",
-    "rivers",
-    "storms",
-    "glaciers",
-    "night_sky",
-    "waterfalls",
-    "canyons",
-    "volcanoes",
-    "lakes",
-    "islands",
-    "clouds",
-    "wildflowers",
-]
+# Empty means "every subject carousel.py defines", which is what you want: this
+# list used to be 17 hardcoded landscape subjects, so creatures and the heavens
+# were never scheduled at all, and new subjects had to be added in two places.
+# Override per-deployment with `content_scheduler_carousel_subjects`.
+CAROUSEL_SUBJECTS: list = []
 
 
 def _cfg_int(key: str, default: int) -> int:
@@ -222,8 +208,11 @@ def produce(kind: str) -> dict:
             if subject in ca.SUBJECTS
         ]
         if not subjects:
-            subjects = [subject for subject in CAROUSEL_SUBJECTS if subject in ca.SUBJECTS]
-        random.shuffle(subjects)
+            subjects = list(ca.SUBJECTS)
+        # Least-recently-used, NOT shuffled. A shuffle has no memory, so the
+        # same handful of subjects kept winning and the account published
+        # "the creativity of God in mountains" three times over.
+        subjects = ca.rank_subjects(subjects)
         tried = []
         for subject in subjects[:attempts]:
             tried.append(subject)
