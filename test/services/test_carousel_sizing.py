@@ -258,6 +258,10 @@ class TestSubjectRotation(unittest.TestCase):
             history.append(pick)
         self.assertCountEqual(history, pool)
 
+    def test_scheduler_defaults_to_every_subject_not_a_hardcoded_list(self):
+        from app.services import content_scheduler
+        self.assertEqual(content_scheduler.CAROUSEL_SUBJECTS, [])
+
 
 class TestQualityGate(unittest.TestCase):
     def _car(self, scales):
