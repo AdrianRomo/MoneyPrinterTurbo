@@ -10,41 +10,81 @@ except ImportError:
 from loguru import logger
 
 from app.config import config
+from app.services import subtitle_cadence
 from app.utils import utils
 
-model_size = config.whisper.get("model_size", "large-v3")
-device = config.whisper.get("device", "cpu")
-compute_type = config.whisper.get("compute_type", "int8")
 model = None
+_model_key = None
+
+
+def _settings() -> tuple[str, str, str]:
+    # Read at call time, not import time: values baked at import survive a
+    # config edit until the process restarts, which is the stale-config trap
+    # this pipeline has been bitten by before.
+    return (
+        str(config.whisper.get("model_size", "large-v3")),
+        str(config.whisper.get("device", "cpu")),
+        str(config.whisper.get("compute_type", "int8")),
+    )
+
+
+def _load_model(model_size: str, device: str, compute_type: str):
+    """Load Whisper, falling back to CPU if the GPU will not have it.
+
+    The 3090 is shared with Ollama and the reranker, so a CUDA load can fail on
+    VRAM at any time. Losing captions entirely over that is a far worse outcome
+    than transcribing slowly, so the fallback is automatic and loud.
+    """
+    model_path = f"{utils.root_dir()}/models/whisper-{model_size}"
+    if not os.path.isfile(f"{model_path}/model.bin"):
+        model_path = model_size
+
+    attempts = [(device, compute_type)]
+    if device != "cpu":
+        attempts.append(("cpu", "int8"))
+
+    last_error = None
+    for attempt_device, attempt_compute in attempts:
+        logger.info(
+            f"loading model: {model_path}, device: {attempt_device}, "
+            f"compute_type: {attempt_compute}"
+        )
+        try:
+            return WhisperModel(
+                model_size_or_path=model_path,
+                device=attempt_device,
+                compute_type=attempt_compute,
+            )
+        except Exception as e:  # noqa: BLE001 - try CPU before giving up
+            last_error = e
+            if attempt_device != "cpu":
+                logger.warning(
+                    f"whisper failed to load on {attempt_device} ({e}); falling back to cpu"
+                )
+
+    logger.error(
+        f"failed to load model: {last_error} \n\n"
+        f"********************************************\n"
+        f"this may be caused by network issue. \n"
+        f"please download the model manually and put it in the 'models' folder. \n"
+        f"see [README.md FAQ](https://github.com/AdrianRomo/Influencer-Automation-2.0) for more details.\n"
+        f"********************************************\n\n"
+    )
+    return None
 
 
 def create(audio_file, subtitle_file: str = ""):
-    global model
+    global model, _model_key
     if WhisperModel is None:
         logger.warning("faster_whisper not available, skipping whisper subtitle generation")
         return ""
-    if not model:
-        model_path = f"{utils.root_dir()}/models/whisper-{model_size}"
-        model_bin_file = f"{model_path}/model.bin"
-        if not os.path.isdir(model_path) or not os.path.isfile(model_bin_file):
-            model_path = model_size
 
-        logger.info(
-            f"loading model: {model_path}, device: {device}, compute_type: {compute_type}"
-        )
-        try:
-            model = WhisperModel(
-                model_size_or_path=model_path, device=device, compute_type=compute_type
-            )
-        except Exception as e:
-            logger.error(
-                f"failed to load model: {e} \n\n"
-                f"********************************************\n"
-                f"this may be caused by network issue. \n"
-                f"please download the model manually and put it in the 'models' folder. \n"
-                f"see [README.md FAQ](https://github.com/AdrianRomo/Influencer-Automation-2.0) for more details.\n"
-                f"********************************************\n\n"
-            )
+    model_size, device, compute_type = _settings()
+    key = (model_size, device, compute_type)
+    if model is None or _model_key != key:
+        model = _load_model(model_size, device, compute_type)
+        _model_key = key if model is not None else None
+        if model is None:
             return None
 
     logger.info(f"start, output file: {subtitle_file}")
@@ -65,6 +105,16 @@ def create(audio_file, subtitle_file: str = ""):
 
     start = timer()
     subtitles = []
+
+    if subtitle_cadence.enabled():
+        # Word-level cues: the whole point of running Whisper rather than
+        # reusing the TTS boundaries, and what keeps a cue inside two lines.
+        words = [word for segment in segments for word in (segment.words or [])]
+        subtitles = subtitle_cadence.group(words)
+        logger.info(subtitle_cadence.report(subtitles))
+        _write_srt(subtitles, subtitle_file)
+        logger.info(f"complete, elapsed: {timer() - start:.2f} s")
+        return
 
     def recognized(seg_text, seg_start, seg_end):
         seg_text = seg_text.strip()
@@ -124,6 +174,10 @@ def create(audio_file, subtitle_file: str = ""):
     diff = end - start
     logger.info(f"complete, elapsed: {diff:.2f} s")
 
+    _write_srt(subtitles, subtitle_file)
+
+
+def _write_srt(subtitles: list, subtitle_file: str) -> None:
     idx = 1
     lines = []
     for subtitle in subtitles:
