@@ -226,33 +226,6 @@ Style rules:
     return _fallback_quote(subject)
 
 
-_ACCENT_RE = re.compile(r"\*([^*]+)\*")
-
-
-def parse_accent(text: str) -> list[tuple[str, bool]]:
-    """Split ``a *bold* c`` into [("a ", False), ("bold", True), (" c", False)].
-
-    The reference Reels set one clause of each quote in a heavier weight; that
-    accent is what gives the frame a focal point. Unmarked text degrades to a
-    single plain run, so nothing breaks when the model ignores the instruction.
-    """
-    runs: list[tuple[str, bool]] = []
-    cursor = 0
-    for match in _ACCENT_RE.finditer(text or ""):
-        if match.start() > cursor:
-            runs.append((text[cursor : match.start()], False))
-        runs.append((match.group(1), True))
-        cursor = match.end()
-    if cursor < len(text or ""):
-        runs.append((text[cursor:], False))
-    return [(chunk, bold) for chunk, bold in runs if chunk] or [(text or "", False)]
-
-
-def strip_accent(text: str) -> str:
-    """The quote as plain prose — for captions, logs and the publish ledger."""
-    return _ACCENT_RE.sub(r"\1", text or "")
-
-
 def _configured_hashtags() -> list[str]:
     raw = config.app.get("quote_reel_caption_hashtags", _language_pack()["hashtags"])
     if isinstance(raw, str):
@@ -275,7 +248,7 @@ def _configured_hashtags() -> list[str]:
 def build_caption_variant(quote: str, subject: str = "") -> dict:
     from app.services import hashtags
 
-    quote = strip_accent(clean_quote(quote)) or _fallback_quote(subject)
+    quote = typography.strip_accent(clean_quote(quote)) or _fallback_quote(subject)
     first_line = quote.rstrip(".")
     if len(first_line) > 86:
         first_line = first_line[:83].rsplit(" ", 1)[0].rstrip(".,;:") + "..."
@@ -751,83 +724,20 @@ def _fonts(size: int) -> dict[bool, object]:
     }
 
 
-def _tokens(runs: list[tuple[str, bool]]) -> list[tuple[str, bool]]:
-    """Word-level tokens carrying their weight, so wrapping can cross runs.
-
-    Splitting per run would tear the punctuation off the accent — ``*eternal*.``
-    became the two tokens "eternal" and ".", drawn a word-space apart. So flatten
-    to text plus a parallel weight mask, split on whitespace, and let each word
-    take the weight most of its letters carry.
-    """
-    text = "".join(chunk for chunk, _ in runs)
-    mask = [bold for chunk, bold in runs for _ in chunk]
-    out: list[tuple[str, bool]] = []
-    index = 0
-    for word in text.split(" "):
-        span = mask[index : index + len(word)]
-        index += len(word) + 1
-        if not word:
-            continue
-        letters = [flag for flag, char in zip(span, word) if char.isalnum()] or span
-        out.append((word, sum(letters) * 2 > len(letters)))
-    return out
-
-
-def _line_width(draw, line: list[tuple[str, bool]], fonts: dict) -> float:
-    if not line:
-        return 0.0
-    total = sum(typography.width(draw, word, fonts[bold], TRACKING) for word, bold in line)
-    space = draw.textlength(" ", font=fonts[False])
-    return total + space * (len(line) - 1)
-
-
-def _wrap_tokens(
-    draw,
-    tokens: list[tuple[str, bool]],
-    fonts: dict,
-    max_w: float,
-) -> list[list[tuple[str, bool]]]:
-    lines: list[list[tuple[str, bool]]] = []
-    current: list[tuple[str, bool]] = []
-    for token in tokens:
-        trial = current + [token]
-        too_wide = _line_width(draw, trial, fonts) > max_w
-        too_many = len(trial) > MAX_WORDS_PER_LINE
-        if current and (too_wide or too_many):
-            lines.append(current)
-            current = [token]
-        else:
-            current = trial
-    if current:
-        lines.append(current)
-    return lines
-
-
 def _layout_quote(
     draw: ImageDraw.ImageDraw,
     quote: str,
     width: int,
 ) -> tuple[dict, list[list[tuple[str, bool]]]]:
     max_width = width * 0.62
-    tokens = _tokens(parse_accent(quote))
+    tokens = typography.tokens(typography.parse_accent(quote))
     for size in range(58, 35, -2):
         fonts = _fonts(size)
-        lines = _wrap_tokens(draw, tokens, fonts, max_width)
+        lines = typography.wrap_tokens(draw, tokens, fonts, max_width, TRACKING, MAX_WORDS_PER_LINE)
         if len(lines) <= MAX_QUOTE_LINES:
             return fonts, lines
     fonts = _fonts(36)
-    return fonts, _wrap_tokens(draw, tokens, fonts, max_width)[:4]
-
-
-def _draw_line_centered(draw, canvas_w: int, y: float, line, fonts, fill) -> None:
-    x = (canvas_w - _line_width(draw, line, fonts)) / 2
-    space = draw.textlength(" ", font=fonts[False])
-    for index, (word, bold) in enumerate(line):
-        fnt = fonts[bold]
-        typography.draw_tracked(draw, (x, y), word, fnt, fill, TRACKING)
-        x += typography.width(draw, word, fnt, TRACKING)
-        if index < len(line) - 1:
-            x += space
+    return fonts, typography.wrap_tokens(draw, tokens, fonts, max_width, TRACKING, MAX_WORDS_PER_LINE)[:4]
 
 
 def _text_band(height: int, start_y: int, total_h: int) -> tuple[int, int]:
@@ -894,14 +804,14 @@ def quote_overlay_image(
     for offset_y, alpha in ((3, 150), (7, 90)):
         y = start_y + offset_y
         for line in lines:
-            _draw_line_centered(shadow_draw, width, y, line, fonts, (0, 0, 0, alpha))
+            typography.draw_line_centered(shadow_draw, width, y, line, fonts, (0, 0, 0, alpha), TRACKING)
             y += line_h
     shadow = shadow.filter(ImageFilter.GaussianBlur(2.2))
     canvas = Image.alpha_composite(canvas, shadow)
     draw = ImageDraw.Draw(canvas)
     y = start_y
     for line in lines:
-        _draw_line_centered(draw, width, y, line, fonts, _TEXT_FILL)
+        typography.draw_line_centered(draw, width, y, line, fonts, _TEXT_FILL, TRACKING)
         y += line_h
     return canvas
 
@@ -1356,8 +1266,8 @@ def _schedule_if_enabled(
         "script_style": "quiet_quote_reel",
         "subtitle_renderer": "centered_serif_quote",
         "subtitle_cadence": "none",
-        "quote": strip_accent(quote)[:120],
-        "quote_chars": len(strip_accent(quote)),
+        "quote": typography.strip_accent(quote)[:120],
+        "quote_chars": len(typography.strip_accent(quote)),
         "language": language_name(),
         "caption_style": caption_meta.get("caption_style"),
         "hashtag_set": set_id,
@@ -1410,7 +1320,7 @@ def render_quote_reel(
     # ``quote`` keeps the *accent* markers the overlay renders in a heavier
     # weight; ``plain`` is what the caption, the ledger and the API report show.
     quote = resolve_quote(params)
-    plain = strip_accent(quote)
+    plain = typography.strip_accent(quote)
     caption_meta = build_caption_variant(
         quote,
         getattr(params, "video_subject", "") or "",

@@ -39,16 +39,27 @@ from app.services import quality, typography
 DEFAULT_FONT_SIZE = 42
 MIN_FONT_SIZE = 30
 MAX_LINES = 2
-TRACKING = 0.03
-LEADING = 1.34
-TEXT_WIDTH_RATIO = 0.78   # of frame width; the cards' margins, not MoviePy's 90%
+# Matched to the reference Reels rather than to the cards: their captions are
+# tracked tighter and set to a narrower measure than a card caption is, and the
+# two reel types have to read as one brand. MAX_WORDS_PER_LINE is what stops a
+# cue running the full measure and reading as prose.
+TRACKING = 0.015
+LEADING = 1.28
+TEXT_WIDTH_RATIO = 0.62
+MAX_WORDS_PER_LINE = 7
+
+# Vertical placement, as a fraction of frame height, for subtitle_position
+# "template". The reference Reels sit their text just above centre; the previous
+# default put captions in the lower third, which is the one thing that still
+# made the narrated reels look like a different account.
+TEMPLATE_CENTER_RATIO = 0.43
 
 # Scrim. Padded well past the glyphs and blurred, so it reads as a shadow under
 # the type rather than as a visible box with edges.
 SCRIM_PAD_X = 56
 SCRIM_PAD_Y = 34
 SCRIM_BLUR = 26
-SCRIM_MAX_ALPHA = 225   # a fully opaque plate would look like a lower third
+SCRIM_MAX_ALPHA = 165   # a full-width band reads heavy long before a box does
 
 # Video asks more of a caption than a card does: the background moves, the
 # viewer is not looking for the text, and compression eats thin strokes. The
@@ -81,33 +92,47 @@ def _face() -> tuple[str, str]:
     return typography.SERIF, "Medium"
 
 
+def _fonts(path: str, instance: str, size: int) -> dict:
+    """Regular and accent faces at one size, keyed by the token's bold flag."""
+    accent = "SemiBold" if instance in ("Light", "Regular") else "Bold"
+    return {
+        False: typography.font(path, size, instance),
+        True: typography.font(path, size, accent),
+    }
+
+
 def _fit_lines(draw, text: str, path: str, instance: str, max_w: float):
     """Largest size at which the text wraps to at most MAX_LINES."""
+    tokens = typography.tokens(typography.parse_accent(text))
     size = _font_size()
     while size > MIN_FONT_SIZE:
-        fnt = typography.font(path, size, instance)
-        lines = typography.wrap(draw, text, fnt, max_w, TRACKING)
+        fonts = _fonts(path, instance, size)
+        lines = typography.wrap_tokens(
+            draw, tokens, fonts, max_w, TRACKING, MAX_WORDS_PER_LINE
+        )
         if len(lines) <= MAX_LINES:
-            return fnt, lines
+            return fonts, lines
         size -= 2
-    fnt = typography.font(path, MIN_FONT_SIZE, instance)
-    lines = typography.wrap(draw, text, fnt, max_w, TRACKING)
+    fonts = _fonts(path, instance, MIN_FONT_SIZE)
+    lines = typography.wrap_tokens(
+        draw, tokens, fonts, max_w, TRACKING, MAX_WORDS_PER_LINE
+    )
     if len(lines) > MAX_LINES:
         # Phase 3 (word-level Whisper cues) is what stops this happening at all;
         # until then a long cue is reported rather than silently clipped.
         logger.warning(
             f"subtitle cue needs {len(lines)} lines at minimum size: {text[:60]!r}"
         )
-    return fnt, lines
+    return fonts, lines
 
 
-def _glyph_mask(size: tuple[int, int], lines: list[str], fnt, baseline: int,
+def _glyph_mask(size: tuple[int, int], lines: list, fonts: dict, baseline: int,
                 line_h: int, width: int) -> Image.Image:
     mask = Image.new("L", size, 0)
     mdraw = ImageDraw.Draw(mask)
     y = baseline
     for line in lines:
-        typography.draw_centered(mdraw, width, y, line, fnt, 255, TRACKING)
+        typography.draw_line_centered(mdraw, width, y, line, fonts, 255, TRACKING)
         y += line_h
     return mask
 
@@ -135,8 +160,8 @@ def _layout(text: str, video_width: int):
     """Type layout for a cue: (probe, font, lines, line height, overlay height)."""
     path, instance = _face()
     probe = ImageDraw.Draw(Image.new("RGB", (10, 10)))
-    fnt, lines = _fit_lines(probe, text, path, instance, video_width * TEXT_WIDTH_RATIO)
-    line_h = int(fnt.size * LEADING)
+    fonts, lines = _fit_lines(probe, text, path, instance, video_width * TEXT_WIDTH_RATIO)
+    line_h = int(fonts[False].size * LEADING)
     # The overlay carries a margin on every side for the blur to fall off in.
     # Without it the Gaussian is clipped at the overlay boundary and the scrim
     # gains exactly the hard edges it exists to avoid — a visible plate instead
@@ -144,7 +169,7 @@ def _layout(text: str, video_width: int):
     # has to be ~3σ for the falloff to actually reach zero; at 1σ the edge still
     # carries ~19% alpha, which is a soft step rather than no step.
     overlay_h = line_h * len(lines) + 2 * (SCRIM_PAD_Y + SCRIM_BLUR * 3)
-    return probe, fnt, lines, line_h, overlay_h
+    return probe, fonts, lines, line_h, overlay_h
 
 
 def cue_height(text: str, video_width: int) -> int:
@@ -173,12 +198,12 @@ def render_cue(text: str, video_width: int, video_height: int,
     if not text:
         return None
 
-    probe, fnt, lines, line_h, overlay_h = _layout(text, video_width)
+    probe, fonts, lines, line_h, overlay_h = _layout(text, video_width)
     margin = SCRIM_BLUR * 3
     text_top = SCRIM_PAD_Y + margin
     overlay = Image.new("RGBA", (video_width, overlay_h), (0, 0, 0, 0))
 
-    mask = _glyph_mask((video_width, overlay_h), lines, fnt, text_top,
+    mask = _glyph_mask((video_width, overlay_h), lines, fonts, text_top,
                        line_h, video_width)
 
     off_x, off_y = background_offset
@@ -193,14 +218,14 @@ def render_cue(text: str, video_width: int, video_height: int,
     # this measured 1.85:1 as needing alpha 150, applied 150, and still shipped a
     # caption below the floor. Instead: build the soft shape, find how much of it
     # actually lands under the letters, and scale so that what lands hits target.
-    widest = max(typography.width(probe, line, fnt, TRACKING) for line in lines)
-    box_w = min(video_width - 2 * margin, widest + 2 * SCRIM_PAD_X)
-    x0 = (video_width - box_w) / 2
+    # A box drawn to the text's own width reads as a dark pill around a short
+    # cue — which is what a lower third looks like, and the opposite of the
+    # reference Reels. A full-width band with only vertical falloff carries the
+    # same measured alpha under the glyphs while reading as shading on the
+    # footage, and matches the wash the quote Reels use.
     shape = Image.new("L", (video_width, overlay_h), 0)
-    ImageDraw.Draw(shape).rounded_rectangle(
-        [x0, margin, x0 + box_w, overlay_h - margin],
-        radius=int(fnt.size * 0.7),
-        fill=255,
+    ImageDraw.Draw(shape).rectangle(
+        [0, margin, video_width, overlay_h - margin], fill=255
     )
     shape = shape.filter(ImageFilter.GaussianBlur(SCRIM_BLUR))
 
@@ -235,7 +260,9 @@ def render_cue(text: str, video_width: int, video_height: int,
     draw = ImageDraw.Draw(overlay)
     y = text_top
     for line in lines:
-        typography.draw_centered(draw, video_width, y, line, fnt, (255, 255, 255, 255), TRACKING)
+        typography.draw_line_centered(
+            draw, video_width, y, line, fonts, (255, 255, 255, 255), TRACKING
+        )
         y += line_h
 
     return np.array(overlay)
@@ -245,7 +272,10 @@ def describe(text: str, video_width: int) -> str:
     """What the renderer decided, for logs and for A/B comparison."""
     path, instance = _face()
     probe = ImageDraw.Draw(Image.new("RGB", (10, 10)))
-    fnt, lines = _fit_lines(probe, " ".join((text or "").split()), path, instance,
-                            video_width * TEXT_WIDTH_RATIO)
+    fonts, lines = _fit_lines(probe, " ".join((text or "").split()), path, instance,
+                              video_width * TEXT_WIDTH_RATIO)
     face = path.rsplit("/", 1)[-1]
-    return f"{face} {instance} {fnt.size}px, {len(lines)} line(s), tracking {TRACKING}"
+    return (
+        f"{face} {instance} {fonts[False].size}px, "
+        f"{len(lines)} line(s), tracking {TRACKING}"
+    )

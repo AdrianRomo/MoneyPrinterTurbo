@@ -1518,7 +1518,12 @@ def generate_video(
         overlay_h = subtitle_style.cue_height(phrase, video_width)
         if not overlay_h:
             return None
-        if params.subtitle_position == "top":
+        if params.subtitle_position == "template":
+            # Where the reference Reels put their text: just above centre, so a
+            # narrated reel and a quote reel read as the same account.
+            y = int(video_height * subtitle_style.TEMPLATE_CENTER_RATIO - overlay_h / 2)
+            y = max(10, min(y, video_height - overlay_h - 10))
+        elif params.subtitle_position == "top":
             y = int(video_height * 0.05)
         elif params.subtitle_position == "custom":
             y = int((video_height - overlay_h) * (params.custom_position / 100))

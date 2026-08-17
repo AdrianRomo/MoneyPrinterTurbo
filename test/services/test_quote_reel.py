@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from app.config import config
 from app.models.schema import MaterialInfo, VideoParams
-from app.services import quote_reel
+from app.services import quote_reel, typography
 
 
 class TestQuoteReel(unittest.TestCase):
@@ -545,21 +545,21 @@ class TestQuoteReelTypography(unittest.TestCase):
 
     def test_parse_accent_splits_the_marked_clause(self):
         self.assertEqual(
-            quote_reel.parse_accent("Beauty opens a window *onto the eternal*."),
+            typography.parse_accent("Beauty opens a window *onto the eternal*."),
             [("Beauty opens a window ", False), ("onto the eternal", True), (".", False)],
         )
 
     def test_unmarked_quote_is_one_plain_run(self):
         self.assertEqual(
-            quote_reel.parse_accent("no accent at all"),
+            typography.parse_accent("no accent at all"),
             [("no accent at all", False)],
         )
 
     def test_tokens_keep_punctuation_attached_to_the_accent(self):
         # Splitting per run tore "*eternal*." into "eternal" and ".", which the
         # renderer then drew a whole word-space apart.
-        tokens = quote_reel._tokens(
-            quote_reel.parse_accent("a window *onto the eternal*.")
+        tokens = typography.tokens(
+            typography.parse_accent("a window *onto the eternal*.")
         )
         self.assertEqual(tokens[-1], ("eternal.", True))
         self.assertNotIn(".", [word for word, _ in tokens])

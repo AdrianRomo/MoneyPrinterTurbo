@@ -144,7 +144,7 @@ class VideoParams(BaseModel):
     sonilo_bgm_prompt: str = Field(default="", max_length=2000)
 
     subtitle_enabled: Optional[bool] = True
-    subtitle_position: Optional[str] = _subtitle_cfg("subtitle_position", "bottom")  # top, bottom, center, custom
+    subtitle_position: Optional[str] = _subtitle_cfg("subtitle_position", "bottom")  # top, bottom, center, custom, template
     custom_position: float = _subtitle_cfg("custom_position", 70.0)
     font_name: Optional[str] = _subtitle_cfg("font_name", "STHeitiMedium.ttc")
     text_fore_color: Optional[str] = _subtitle_cfg("text_fore_color", "#FFFFFF")

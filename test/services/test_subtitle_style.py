@@ -4,11 +4,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from app.config import config
-from app.services import quality, subtitle_style
+from app.services import quality, subtitle_style, typography
 
 WIDTH, HEIGHT = 1080, 1920
 
@@ -187,3 +188,52 @@ class TestFace(SubtitleStyleTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTemplateFormat(unittest.TestCase):
+    """Captions match the reference Reels, so both reel types read as one brand."""
+
+    def test_accent_markers_set_a_clause_in_a_heavier_weight(self):
+        fonts, lines = subtitle_style._fit_lines(
+            ImageDraw.Draw(Image.new("RGB", (10, 10))),
+            "Let your breath be *gentle*",
+            typography.SERIF,
+            "Medium",
+            1080 * subtitle_style.TEXT_WIDTH_RATIO,
+        )
+        weights = [bold for line in lines for _, bold in line]
+        self.assertIn(True, weights)
+        self.assertIn(False, weights)
+        self.assertIsNot(fonts[True], fonts[False])
+
+    def test_markers_never_reach_the_rendered_glyphs(self):
+        _, lines = subtitle_style._fit_lines(
+            ImageDraw.Draw(Image.new("RGB", (10, 10))),
+            "Let your breath be *gentle*",
+            typography.SERIF,
+            "Medium",
+            1080 * subtitle_style.TEXT_WIDTH_RATIO,
+        )
+        self.assertNotIn("*", "".join(word for line in lines for word, _ in line))
+
+    def test_a_cue_is_capped_by_word_count_as_well_as_width(self):
+        _, lines = subtitle_style._fit_lines(
+            ImageDraw.Draw(Image.new("RGB", (10, 10))),
+            "one two three four five six seven eight nine ten",
+            typography.SERIF,
+            "Medium",
+            10_000.0,
+        )
+        for line in lines:
+            self.assertLessEqual(len(line), subtitle_style.MAX_WORDS_PER_LINE)
+
+    def test_template_placement_sits_just_above_centre(self):
+        # The lower third is what made the narrated reels look like another
+        # account; 0.43 is where the reference Reels put their text.
+        self.assertGreater(subtitle_style.TEMPLATE_CENTER_RATIO, 0.35)
+        self.assertLess(subtitle_style.TEMPLATE_CENTER_RATIO, 0.5)
+
+    def test_unmarked_cue_still_renders(self):
+        rendered = subtitle_style.render_cue("plain caption", 1080, 1920)
+        self.assertIsNotNone(rendered)
+        self.assertEqual(rendered.shape[1], 1080)
