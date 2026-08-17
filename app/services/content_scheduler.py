@@ -41,21 +41,34 @@ from app.services.postiz import PostizService, _local_date
 # postiz_daily_quota_<kind>. The time of day comes from the publishing windows
 # in postiz.py (postiz_window_<kind>), not from here.
 #
-# Three stories a day: the first is the story twin of the day's feed card
-# (same verse, same background, pointing at the post), published just after it
-# to give it early engagement velocity; the other two stand alone.
+# THE MIX IS A DISTRIBUTION DECISION, NOT A PRODUCTION ONE.
 #
-# One window per story, not one window shared by three — see _windows_for in
-# postiz.py. The scheduler produces at most one item per kind per run, so three
-# stories need three runs, and by the second run a single shared window is
-# mostly in the past.
+# This was post 1 / carousel 1 / reel 1 / story 3, so half the daily output went
+# to Stories — a surface that only reaches people who ALREADY follow the
+# account. At the reach this account is actually getting (8-14 per post, zero
+# saves, zero shares over its first four days), that half was being published to
+# almost nobody, while the two surfaces that reach strangers got one slot each.
+#
+# Reels are the only real discovery surface Instagram has; carousels reach
+# non-followers through Explore. So the budget moves to them. Stories keep
+# exactly one slot, and it is the twin of the day's feed card — the one story
+# with a job to do, giving the post early engagement velocity.
+#
+# Revisit this once W3.1 attribution has reach broken down BY FORMAT. This is a
+# reasoned prior, and the whole point of measuring per-format reach is that it
+# stops being one.
 PLAN = {
     "post": {"per_day": 1},
     "carousel": {"per_day": 1},
-    # This shares the real Reel quota/window with Article Mode. If Article Mode
-    # has already scheduled a Reel today, quiet quote Reels wait for tomorrow.
-    "reel": {"per_day": 1},
-    "story": {"per_day": 3},
+    # Shares the real Reel quota and windows with Article Mode: if Article Mode
+    # has already scheduled today's Reels, quiet quote Reels wait for tomorrow.
+    #
+    # Two Reels needs TWO reel windows and TWO scheduler runs. run_once produces
+    # at most one item per kind per run, and with a single window the second run
+    # of the day would find it mostly in the past and roll to tomorrow — costing
+    # a post while the ledger still looks fine. See _windows_for in postiz.py.
+    "reel": {"per_day": 2},
+    "story": {"per_day": 1},
 }
 
 STORY_THEMES = ["peace and rest", "trust in the everyday", "gratitude",
