@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import os
 import random
 import re
@@ -24,6 +26,7 @@ _api_key_lock = threading.Lock()
 _MIN_VIDEO_RENDITION_DIMENSION = 480
 _DEFAULT_MATERIAL_DOWNLOAD_CONCURRENCY = 2
 _MAX_MATERIAL_DOWNLOAD_CONCURRENCY = 4
+_STORYBLOCKS_API_BASE = "https://api.storyblocks.com"
 
 
 def _safe_public_url(value: Any) -> str | None:
@@ -159,6 +162,24 @@ def _get_tls_verify() -> bool:
         )
 
     return bool(tls_verify)
+
+
+def _cfg_bool(key: str, default: bool = False) -> bool:
+    value = config.app.get(key, default)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _cfg_int(key: str, default: int, *, minimum: int = 0, maximum: int | None = None) -> int:
+    try:
+        value = int(config.app.get(key, default))
+    except (TypeError, ValueError):
+        value = default
+    value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
 
 
 def _video_rendition_dimensions(
@@ -631,6 +652,288 @@ def search_videos_coverr(
     return []
 
 
+def _storyblocks_credentials() -> tuple[str, str, str, str]:
+    public_key = str(
+        config.app.get("storyblocks_public_key")
+        or config.app.get("storyblocks_api_key")
+        or ""
+    ).strip()
+    private_key = str(
+        config.app.get("storyblocks_private_key")
+        or config.app.get("storyblocks_secret_key")
+        or ""
+    ).strip()
+    project_id = str(config.app.get("storyblocks_project_id") or "").strip()
+    user_id = str(config.app.get("storyblocks_user_id") or "").strip()
+    missing = [
+        name
+        for name, value in (
+            ("storyblocks_public_key", public_key),
+            ("storyblocks_private_key", private_key),
+            ("storyblocks_project_id", project_id),
+            ("storyblocks_user_id", user_id),
+        )
+        if not value
+    ]
+    if missing:
+        raise ValueError(
+            "\n\n##### Storyblocks is not configured #####\n\n"
+            f"Missing: {', '.join(missing)}\n"
+            f"Please set it in the config.toml file: {config.config_file}\n"
+        )
+    return public_key, private_key, project_id, user_id
+
+
+def storyblocks_is_configured() -> bool:
+    try:
+        _storyblocks_credentials()
+        return True
+    except ValueError:
+        return False
+
+
+def _storyblocks_auth_params(
+    resource_path: str,
+    *,
+    expires: int | None = None,
+) -> dict[str, str]:
+    public_key, private_key, _project_id, _user_id = _storyblocks_credentials()
+    expires = expires or int(time.time()) + 3600
+    key = f"{private_key}{expires}".encode("utf-8")
+    digest = hmac.new(
+        key,
+        resource_path.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        "APIKEY": public_key,
+        "EXPIRES": str(expires),
+        "HMAC": digest,
+    }
+
+
+def _storyblocks_get(resource_path: str, params: dict[str, Any]) -> dict:
+    query_params = {
+        **params,
+        **_storyblocks_auth_params(resource_path),
+    }
+    url = f"{_STORYBLOCKS_API_BASE}{resource_path}?{urlencode(query_params)}"
+    response = requests.get(
+        url,
+        proxies=config.proxy,
+        verify=_get_tls_verify(),
+        timeout=(30, 60),
+    )
+    if hasattr(response, "raise_for_status"):
+        response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, dict) else {}
+
+
+def _storyblocks_items(data: dict) -> list[dict]:
+    for key in ("results", "stock_items", "items", "videos"):
+        value = data.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
+def _storyblocks_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return None
+    return str(value).strip().lower() in {"1", "true", "yes"}
+
+
+def _storyblocks_field(item: dict, snake: str, camel: str | None = None) -> Any:
+    if snake in item:
+        return item.get(snake)
+    if camel and camel in item:
+        return item.get(camel)
+    return None
+
+
+def _storyblocks_duration(item: dict) -> int:
+    raw_duration = item.get("duration")
+    if raw_duration in (None, ""):
+        raw_duration = _storyblocks_field(item, "duration_ms", "durationMs")
+        try:
+            return int(float(raw_duration or 0) / 1000)
+        except (TypeError, ValueError):
+            return 0
+    try:
+        return int(float(raw_duration or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _storyblocks_source_page(item: dict) -> str | None:
+    for key in ("source_page", "url", "web_url"):
+        page = _safe_public_url(item.get(key))
+        if page:
+            return page
+    url_id = item.get("url_id") or item.get("urlId")
+    if url_id:
+        return f"https://www.storyblocks.com/video/stock/{url_id}"
+    return None
+
+
+def _select_storyblocks_download_url(data: dict) -> tuple[str, str, int, int] | None:
+    mp4 = data.get("MP4")
+    if not isinstance(mp4, dict):
+        return None
+    preferred = str(config.app.get("storyblocks_download_quality", "_1080p") or "_1080p")
+    quality_order = [preferred, "_1080p", "_720p", "_4k", "_480p"]
+    seen = set()
+    for key in quality_order + sorted(mp4.keys()):
+        if key in seen:
+            continue
+        seen.add(key)
+        value = mp4.get(key)
+        if isinstance(value, str) and value:
+            height = int(re.sub(r"\D+", "", key) or 0)
+            width = int(round(height * 9 / 16)) if height else 0
+            return value, key, width, height
+        if isinstance(value, dict):
+            url = value.get("url") or value.get("download_url")
+            if url:
+                return (
+                    str(url),
+                    key,
+                    int(value.get("width") or 0),
+                    int(value.get("height") or value.get("resolution") or 0),
+                )
+    return None
+
+
+def _storyblocks_download_url(stock_item_id: str) -> tuple[str, str, int, int] | None:
+    _public_key, _private_key, project_id, user_id = _storyblocks_credentials()
+    resource_path = f"/api/v2/videos/stock-item/download/{stock_item_id}"
+    data = _storyblocks_get(
+        resource_path,
+        {"project_id": project_id, "user_id": user_id},
+    )
+    return _select_storyblocks_download_url(data)
+
+
+def search_videos_storyblocks(
+    search_term: str,
+    minimum_duration: int,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+) -> List[MaterialInfo]:
+    """
+    Storyblocks API v2 video search.
+
+    The query is deliberately conservative for Reels: vertical footage,
+    safe-search, non-editorial, no 360/VR, and optional release filters from
+    config. Download URLs are resolved through the official download endpoint so
+    the rendered reel uses licensed full-size media rather than previews.
+    """
+    _public_key, private_key, project_id, user_id = _storyblocks_credentials()
+    aspect = VideoAspect(video_aspect)
+    video_width, video_height = aspect.to_resolution()
+    params: dict[str, Any] = {
+        "project_id": project_id,
+        "user_id": user_id,
+        "keywords": search_term,
+        "content_type": "footage",
+        "quality": str(config.app.get("storyblocks_quality", "HD") or "HD"),
+        "min_duration": max(1, int(minimum_duration or 1)),
+        "max_duration": _cfg_int("storyblocks_max_duration", 30, minimum=1),
+        "page": 1,
+        "results_per_page": _cfg_int("storyblocks_results_per_page", 8, minimum=1, maximum=20),
+        "sort_by": str(config.app.get("storyblocks_sort_by", "most_relevant") or "most_relevant"),
+        "sort_order": "DESC",
+        "safe_search": "true",
+        "orientation": "vertical" if aspect == VideoAspect.portrait else "all",
+        "is_editorial": "false",
+        "is_vr_360": "false",
+        "extended": (
+            "download_formats,keywords,isSensitiveContent,categories,description,"
+            "isEditorial,hasTalentReleased,hasPropertyReleased,hasAudio,"
+            "maxResolution,aspectRatio,dateAdded,durationMs"
+        ),
+    }
+    required_keywords = str(config.app.get("storyblocks_required_keywords", "") or "").strip()
+    filtered_keywords = str(
+        config.app.get(
+            "storyblocks_filtered_keywords",
+            "text,logo,watermark,news,editorial",
+        )
+        or ""
+    ).strip()
+    if required_keywords:
+        params["required_keywords"] = required_keywords
+    if filtered_keywords:
+        params["filtered_keywords"] = filtered_keywords
+    if _cfg_bool("storyblocks_require_talent_release", False):
+        params["has_talent_released"] = "true"
+    if _cfg_bool("storyblocks_require_property_release", False):
+        params["has_property_released"] = "true"
+
+    logger.info(f"searching videos on storyblocks: term={search_term!r}")
+    try:
+        response = _storyblocks_get("/api/v2/videos/search", params)
+        video_items: list[MaterialInfo] = []
+        for item in _storyblocks_items(response):
+            duration = _storyblocks_duration(item)
+            if duration < minimum_duration:
+                continue
+            stock_item_id = str(item.get("id") or item.get("stock_item_id") or "").strip()
+            if not stock_item_id:
+                continue
+            if _storyblocks_bool(_storyblocks_field(item, "is_editorial", "isEditorial")):
+                continue
+            download = _storyblocks_download_url(stock_item_id)
+            if download is None:
+                continue
+            download_url, rendition_id, width, height = download
+            if width <= 0 or height <= 0:
+                width, height = video_width, video_height
+            material = MaterialInfo()
+            material.provider = "storyblocks"
+            material.url = download_url
+            material.duration = duration
+            material.source_info = {
+                "provider": "storyblocks",
+                "search_term": search_term,
+                "asset_id": stock_item_id,
+                "storyblocks_asset_id": str(item.get("asset_id") or item.get("assetId") or ""),
+                "source_page": _storyblocks_source_page(item),
+                "metadata_text": _coerce_metadata_text(
+                    item.get("title"),
+                    item.get("description"),
+                    item.get("keywords"),
+                    item.get("categories"),
+                    _semantic_text_from_url(_storyblocks_source_page(item)),
+                ),
+                "creator": _creator_info(item.get("contributor") or item.get("creator")),
+                "license_name": "Storyblocks License",
+                "license_url": "https://www.storyblocks.com/license",
+                "is_editorial": False,
+                "has_talent_released": _storyblocks_bool(
+                    _storyblocks_field(item, "has_talent_released", "hasTalentReleased")
+                ),
+                "has_property_released": _storyblocks_bool(
+                    _storyblocks_field(item, "has_property_released", "hasPropertyReleased")
+                ),
+                "rendition": {
+                    "id": rendition_id,
+                    "width": width,
+                    "height": height,
+                },
+            }
+            video_items.append(material)
+        return video_items
+    except Exception as exc:
+        logger.error(
+            "storyblocks video search failed: "
+            f"error={type(exc).__name__}, detail={_redact_request_error(exc, private_key)}"
+        )
+    return []
+
+
 def _validate_video_file(video_path: str) -> bool:
     if not os.path.exists(video_path) or os.path.getsize(video_path) <= 0:
         return False
@@ -969,6 +1272,9 @@ def download_videos(
     elif source == "coverr":
         provider = "coverr"
         remote_search_videos = search_videos_coverr
+    elif source == "storyblocks":
+        provider = "storyblocks"
+        remote_search_videos = search_videos_storyblocks
 
     def search_videos(
         search_term: str,
@@ -1209,6 +1515,7 @@ def _download_videos_by_script_order(
 _PEXELS_LICENSE = ("Pexels License", "https://www.pexels.com/license/")
 _PIXABAY_LICENSE = ("Pixabay Content License", "https://pixabay.com/service/license-summary/")
 _COVERR_LICENSE = ("Coverr License", "https://coverr.co/license")
+_STORYBLOCKS_LICENSE = ("Storyblocks License", "https://www.storyblocks.com/license")
 _IMAGE_MAGIC_BYTES = (
     b"\xff\xd8\xff",  # JPEG
     b"\x89PNG\r\n\x1a\n",  # PNG
@@ -1424,6 +1731,7 @@ def _material_video_to_asset(item: MaterialInfo, search_term: str) -> MediaAsset
     license_name, license_url = {
         "pixabay": _PIXABAY_LICENSE,
         "coverr": _COVERR_LICENSE,
+        "storyblocks": _STORYBLOCKS_LICENSE,
     }.get(provider, _PEXELS_LICENSE)
     creator = creator_info.get("name", "")
     provider_label = provider.capitalize() if provider else "stock provider"
@@ -1461,6 +1769,7 @@ def search_video_assets(
         "pexels": search_videos_pexels,
         "pixabay": search_videos_pixabay,
         "coverr": search_videos_coverr,
+        "storyblocks": search_videos_storyblocks,
     }
     searcher = searchers.get(provider)
     if searcher is None:

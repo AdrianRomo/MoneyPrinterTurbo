@@ -22,3 +22,13 @@ services:
     command: [ "python3", "main.py" ]
     volumes: *common-volumes
     restart: always
+# NOTE: there is deliberately no content-scheduler service here.
+#
+# On the AI workstation the scheduler is mpt-content-scheduler.timer, which runs
+# `docker exec influencer-automation-2.0-api python3 -m app.services.content_scheduler`.
+# A second scheduler defined here reuses the compose project name but NOT the
+# stack's storage bind mount, so it gets its own storage/postiz/publish_log.json.
+# Two ledgers means neither can see the other's posts and the daily quota stops
+# holding — on 2026-08-16 that queued the same Reel to Instagram twice.
+# Run the loop by hand if you need it (`--loop --interval N`), but do not give it
+# its own container unless it mounts the same storage path as api/worker.

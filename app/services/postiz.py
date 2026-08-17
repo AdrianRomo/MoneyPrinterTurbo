@@ -719,6 +719,7 @@ class PostizService:
         *,
         now: Optional[datetime] = None,
         variant: Optional[dict] = None,
+        set_id: Optional[str] = None,
     ) -> dict:
         if not self.is_auto_schedule_configured():
             return self._failure("Postiz auto-scheduling is not configured")
@@ -748,6 +749,7 @@ class PostizService:
             integration=integration["integration"],
             kind="reel",
             variant=variant,
+            set_id=set_id,
         )
         if not scheduled.get("success"):
             return scheduled
@@ -758,6 +760,18 @@ class PostizService:
 postiz_service = PostizService()
 
 
-def schedule_video(video_path: str, caption: str, publish_at: Optional[datetime] = None,
-                   variant: Optional[dict] = None) -> dict:
-    return postiz_service.schedule_video(video_path, caption, publish_at, variant=variant)
+def schedule_video(
+    video_path: str,
+    caption: str,
+    publish_at: Optional[datetime] = None,
+    *,
+    variant: Optional[dict] = None,
+    set_id: Optional[str] = None,
+) -> dict:
+    return postiz_service.schedule_video(
+        video_path,
+        caption,
+        publish_at,
+        variant=variant,
+        set_id=set_id,
+    )

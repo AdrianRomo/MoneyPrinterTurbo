@@ -172,7 +172,7 @@ class VideoParams(BaseModel):
     # commands that never set these keep running unchanged:
     #   content_mode="topic" + media_mode="videos_only" == legacy pipeline.
     # -----------------------------------------------------------------------
-    content_mode: Optional[str] = "topic"  # topic | article_url | article_feed
+    content_mode: Optional[str] = "topic"  # topic | article_url | article_feed | quiet_quote_reel
     media_mode: Optional[str] = "videos_only"  # videos_only | images_only | mixed
     article_url: Optional[str] = None  # source article for content_mode="article_url"
     article_id: Optional[str] = None  # persisted article for content_mode="article_feed"

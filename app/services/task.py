@@ -1410,6 +1410,11 @@ def start(
             return article_pipeline.render_article_video(
                 task_id, params, stop_at=stop_at
             )
+        if content_mode == "quiet_quote_reel":
+            # Imported lazily to keep the legacy topic pipeline import surface unchanged.
+            from app.services import quote_reel
+
+            return quote_reel.render_quote_reel(task_id, params, stop_at=stop_at)
         return _run_pipeline(
             task_id,
             params,

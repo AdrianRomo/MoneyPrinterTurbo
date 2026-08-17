@@ -85,6 +85,7 @@ class ContentMode(str, Enum):
     topic = "topic"
     article_url = "article_url"
     article_feed = "article_feed"
+    quiet_quote_reel = "quiet_quote_reel"
 
 
 class MediaMode(str, Enum):

@@ -1943,6 +1943,7 @@ def video_to_normalized_clip(
     duration: float,
     video_aspect: VideoAspect = VideoAspect.portrait,
     threads: int = 2,
+    preserve_audio: bool = False,
 ) -> str:
     """Scale/letterbox a video to the target aspect and fit it to ``duration``
     (looping if shorter, trimming if longer). Used for mixed-media timelines."""
@@ -1952,7 +1953,7 @@ def video_to_normalized_clip(
     source = None
     fitted = None
     try:
-        source = _open_video_clip_quietly(video_path)
+        source = _open_video_clip_quietly(video_path, audio=preserve_audio)
         clip_w, clip_h = source.size
         if source.duration < duration:
             source = source.with_effects([vfx.Loop(duration=duration)])

@@ -188,17 +188,24 @@ class TestPostizService(unittest.TestCase):
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as handle:
             handle.write(b"fake mp4")
             video_path = handle.name
+        variant = {"caption_style": "saveable_contemplative"}
         try:
-            result = PostizService().schedule_video(
-                video_path,
-                "One Bible-based tip for today. #Bible",
-                now=datetime(2026, 7, 29, 12, 0, tzinfo=timezone.utc),
-            )
+            with patch.object(PostizService, "_record_publish") as record_publish:
+                result = PostizService().schedule_video(
+                    video_path,
+                    "One Bible-based tip for today. #Bible",
+                    now=datetime(2026, 7, 29, 12, 0, tzinfo=timezone.utc),
+                    variant=variant,
+                    set_id="peace",
+                )
         finally:
             os.unlink(video_path)
 
         self.assertTrue(result["success"])
         self.assertEqual(result["post_id"], "post-1")
+        record_publish.assert_called_once()
+        self.assertEqual(record_publish.call_args.kwargs["set_id"], "peace")
+        self.assertEqual(record_publish.call_args.kwargs["variant"], variant)
         self.assertEqual(mock_get.call_count, 4)  # integration verified twice, slot, posts
         self.assertEqual(mock_post.call_count, 2)  # upload, create post
 

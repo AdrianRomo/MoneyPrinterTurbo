@@ -33,3 +33,5 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+# See docker-compose.yml: the scheduler is a timer-driven `docker exec` into the
+# api container, not a service of its own.

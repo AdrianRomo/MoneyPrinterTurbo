@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 import requests
 
@@ -583,6 +584,128 @@ class TestMaterialTlsVerification(unittest.TestCase):
 
         self.assertEqual(result, ["/tmp/a1.mp4"])
         self.assertTrue(warning.called)
+
+
+class TestStoryblocksProvider(unittest.TestCase):
+    """Storyblocks API tests are fully mocked; no real credentials or network."""
+
+    def setUp(self):
+        self.original_app_config = dict(config.app)
+        self.original_proxy_config = dict(config.proxy)
+        config.app.update(
+            {
+                "storyblocks_public_key": "storyblocks-public",
+                "storyblocks_private_key": "storyblocks-private",
+                "storyblocks_project_id": "ia2-project",
+                "storyblocks_user_id": "ia2-user",
+                "storyblocks_download_quality": "_1080p",
+                "storyblocks_require_talent_release": True,
+                "storyblocks_require_property_release": True,
+            }
+        )
+        config.proxy.clear()
+
+    def tearDown(self):
+        config.app.clear()
+        config.app.update(self.original_app_config)
+        config.proxy.clear()
+        config.proxy.update(self.original_proxy_config)
+
+    def test_search_storyblocks_uses_safe_vertical_filters_and_download_endpoint(self):
+        search_response = SimpleNamespace(
+            json=lambda: {
+                "results": [
+                    {
+                        "id": 11851,
+                        "title": "Quiet church window",
+                        "duration": 14,
+                        "url_id": "quiet-church-window",
+                        "isEditorial": False,
+                        "hasTalentReleased": True,
+                        "hasPropertyReleased": True,
+                        "keywords": ["church", "window", "light"],
+                        "contributor": {"username": "Storyblocks Video"},
+                    }
+                ]
+            },
+            raise_for_status=lambda: None,
+        )
+        download_response = SimpleNamespace(
+            json=lambda: {
+                "MP4": {
+                    "_720p": "https://cdn.storyblocks.example/quiet-720.mp4",
+                    "_1080p": "https://cdn.storyblocks.example/quiet-1080.mp4",
+                }
+            },
+            raise_for_status=lambda: None,
+        )
+
+        with patch(
+            "app.services.material.requests.get",
+            side_effect=[search_response, download_response],
+        ) as get:
+            results = material.search_videos_storyblocks("church window", 5)
+
+        self.assertEqual(len(results), 1)
+        search_url = get.call_args_list[0].args[0]
+        search_qs = parse_qs(urlsplit(search_url).query)
+        self.assertEqual(search_qs["orientation"], ["vertical"])
+        self.assertEqual(search_qs["is_editorial"], ["false"])
+        self.assertEqual(search_qs["safe_search"], ["true"])
+        self.assertEqual(search_qs["has_talent_released"], ["true"])
+        self.assertEqual(search_qs["has_property_released"], ["true"])
+        self.assertEqual(search_qs["project_id"], ["ia2-project"])
+        self.assertEqual(search_qs["user_id"], ["ia2-user"])
+        self.assertEqual(search_qs["APIKEY"], ["storyblocks-public"])
+        self.assertIn("HMAC", search_qs)
+        self.assertNotIn("storyblocks-private", search_url)
+
+        download_url = get.call_args_list[1].args[0]
+        self.assertIn("/api/v2/videos/stock-item/download/11851", download_url)
+        self.assertEqual(results[0].provider, "storyblocks")
+        self.assertEqual(
+            results[0].url,
+            "https://cdn.storyblocks.example/quiet-1080.mp4",
+        )
+        self.assertEqual(results[0].source_info["asset_id"], "11851")
+        self.assertFalse(results[0].source_info["is_editorial"])
+        self.assertTrue(results[0].source_info["has_talent_released"])
+        self.assertTrue(results[0].source_info["has_property_released"])
+
+    def test_download_videos_dispatches_storyblocks_provider(self):
+        item = material.MaterialInfo(
+            provider="storyblocks",
+            url="https://cdn.storyblocks.example/a.mp4",
+            duration=5,
+            source_info={"provider": "storyblocks", "asset_id": "sb-1"},
+        )
+
+        with (
+            patch.dict(config.app, {"material_directory": ""}),
+            patch.object(material, "search_videos_storyblocks", return_value=[item]) as search,
+            patch.object(material, "save_video", return_value="/tmp/storyblocks.mp4"),
+            patch.object(
+                material.material_cache,
+                "load_material_search_cache",
+                return_value=None,
+            ),
+            patch.object(material.material_cache, "save_material_search_cache"),
+            patch.object(
+                material.task_artifacts,
+                "patch_script_data",
+                return_value=True,
+            ),
+        ):
+            result = material.download_videos(
+                task_id="storyblocks-provider",
+                search_terms=["window light"],
+                source="storyblocks",
+                audio_duration=1,
+                max_clip_duration=5,
+            )
+
+        search.assert_called_once()
+        self.assertEqual(result, ["/tmp/storyblocks.mp4"])
 
 
 class TestCoverrProvider(unittest.TestCase):
