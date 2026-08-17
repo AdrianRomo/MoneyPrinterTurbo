@@ -156,3 +156,88 @@ def label(part: dict) -> str:
     string leads the caption, and `.title()` on it would render "3 Of 7".
     """
     return f"{part['title']}  ·  Part {part['part']} of {part['total']}"
+
+
+# --- reels -------------------------------------------------------------------
+#
+# The cards run as finite, curated series; Reels cannot, because their subject
+# comes from whatever the article worker found that morning. So a Reel series is
+# an open-ended *format* rather than a fixed run: same name, same treatment, a
+# number that keeps counting. "Ordinary Grace, no. 4" tells a viewer this is a
+# thing with a back catalogue, and a follow is a subscription to a thing — which
+# is what converts a viewer into a follower, and a standalone reel never does.
+#
+# No total, deliberately: "no. 4 of 7" on an open format would be a lie, and a
+# format that visibly ends gives no reason to follow.
+
+# Its own file, not a key in the card state: the card series' advance() writes
+# a whole fresh dict, so a reel counter living beside it would be silently
+# dropped the next time a card published.
+_REEL_STATE_KEY = "reel_number"
+
+
+def _reel_state_path() -> str:
+    d = "/influencer-automation-2.0/storage/verse_cards"
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "reel_series_state.json")
+
+
+def _reel_load() -> dict:
+    try:
+        with open(_reel_state_path(), encoding="utf-8") as fh:
+            state = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def _reel_save(state: dict) -> None:
+    try:
+        with open(_reel_state_path(), "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+    except OSError as exc:
+        logger.warning(f"could not persist reel series state: {exc}")
+
+
+def reel_title() -> str:
+    """The Reel series name, or "" when the feature is off."""
+    from app.config import config
+
+    return str(config.app.get("reel_series_title", "") or "").strip()
+
+
+def reel_current() -> Optional[dict]:
+    """The next Reel's place in the series, or None when disabled."""
+    title = reel_title()
+    if not title:
+        return None
+    state = _reel_load()
+    try:
+        published = int(state.get(_REEL_STATE_KEY, 0) or 0)
+    except (TypeError, ValueError):
+        published = 0
+    return {"title": title, "number": published + 1}
+
+
+def reel_advance() -> None:
+    """Count a published Reel.
+
+    Called only after a real publish, for the same reason the card series does:
+    a failed render must not burn a number and leave a gap in the run.
+    """
+    if not reel_title():
+        return
+    state = _reel_load()
+    try:
+        published = int(state.get(_REEL_STATE_KEY, 0) or 0)
+    except (TypeError, ValueError):
+        published = 0
+    state[_REEL_STATE_KEY] = published + 1
+    _reel_save(state)
+
+
+def reel_label(part: Optional[dict]) -> str:
+    """e.g. 'Ordinary Grace, no. 4'. Empty string when the series is off."""
+    if not part:
+        return ""
+    return f"{part['title']}, no. {part['number']}"

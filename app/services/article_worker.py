@@ -293,6 +293,22 @@ def _render_cluster(
     return result
 
 
+def _with_series_line(caption: str, part: Optional[dict]) -> str:
+    """Lead the caption with the series line, e.g. 'Ordinary Grace, no. 4'.
+
+    First line, because Instagram indexes caption text for search and shows the
+    first line before the fold — it is the only place a viewer reliably reads.
+    """
+    from app.services import series
+
+    line = series.reel_label(part)
+    if not line or not caption.strip():
+        return caption
+    if caption.lstrip().lower().startswith(line.lower()):
+        return caption
+    return f"{line}\n\n{caption}".strip()[:2200]
+
+
 def _caption_for_script(script) -> str:
     metadata = getattr(script, "social_metadata", None)
     candidates = [
@@ -386,11 +402,22 @@ def _publish(task_id: str, script, cluster: Optional[ArticleCluster] = None) -> 
             narration = script.narration_text() if hasattr(script, "narration_text") else str(script)
             hook_text = reel_hook.generate_hook(subject, narration)
             video_for_post = reel_hook.add_hook(videos[0], hook_text)
+
+            from app.services import series
+
+            part = series.reel_current()
+            variant = _variant_of(video_for_post, narration, hook_text)
+            if part:
+                variant["series"] = series.reel_label(part)
             result = postiz.schedule_video(
-                video_for_post, caption,
-                variant=_variant_of(video_for_post, narration, hook_text),
+                video_for_post, _with_series_line(caption, part), variant=variant,
             )
             result["provider"] = "postiz"
+            # Count the number only once the post really exists, for the same
+            # reason the card series does: a failed publish must not burn a
+            # number and leave a gap in the run.
+            if result.get("success"):
+                series.reel_advance()
             return result
 
         if not (
