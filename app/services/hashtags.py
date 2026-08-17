@@ -154,7 +154,9 @@ def tags_for(set_id: str) -> list[str]:
 
 
 def record_sample(set_id: str, media_id: str, metrics: dict,
-                  variant: Optional[dict] = None) -> None:
+                  variant: Optional[dict] = None,
+                  kind: Optional[str] = None,
+                  local_hour: Optional[int] = None) -> None:
     """Called by the insights collector once a post's numbers are in."""
     samples = _load("samples.json", [])
     if any(s.get("media_id") == media_id for s in samples):
@@ -162,8 +164,82 @@ def record_sample(set_id: str, media_id: str, metrics: dict,
     sample = {"set_id": set_id, "media_id": media_id, "metrics": metrics}
     if variant:
         sample["variant"] = variant
+    if kind:
+        sample["kind"] = kind
+    if local_hour is not None:
+        sample["local_hour"] = int(local_hour)
     samples.append(sample)
     _save("samples.json", samples[-500:])
+
+
+# --- reach by dimension -------------------------------------------------------
+#
+# Until now this module scored exactly ONE variable — which hashtag set was used
+# — and its own docstring says hashtags have been a weak ranking signal since
+# 2024. Meanwhile format, cover variant, subject, verse and posting hour, all of
+# which plausibly matter more, were recorded at publish time and never read.
+#
+# These are read-only reports. Nothing selects on them yet, and that is
+# deliberate: with a handful of samples any of these breakdowns is noise, and
+# wiring a bandit to noise is how the hashtag rotation locked onto whichever set
+# happened to get shown twice. They exist so the priors in the runbook — the
+# posting windows especially, which it explicitly flags as unmeasured — can stop
+# being priors once there is enough data to read.
+
+_MIN_DIMENSION_SAMPLES = 3
+
+
+def _dimension_of(sample: dict, dimension: str):
+    """Pull one axis out of a sample, wherever it happens to live."""
+    if dimension in ("kind", "local_hour"):
+        return sample.get(dimension)
+    return (sample.get("variant") or {}).get(dimension)
+
+
+def reach_by(dimension: str, samples: Optional[list] = None) -> dict:
+    """{value: {samples, mean_score, mean_reach, saves, shares}} for one axis.
+
+    `dimension` is a ledger field ("kind", "local_hour") or a variant key
+    ("subject", "cover_variant", "reference", "series", ...).
+    """
+    if samples is None:
+        samples = _load("samples.json", [])
+    grouped: dict = {}
+    for s in samples:
+        value = _dimension_of(s, dimension)
+        if value is None or not isinstance(s.get("metrics"), dict):
+            continue
+        grouped.setdefault(str(value), []).append(s["metrics"])
+    out = {}
+    for value, rows in grouped.items():
+        n = len(rows)
+        out[value] = {
+            "samples": n,
+            "mean_score": round(sum(score_of(m) for m in rows) / n, 2),
+            "mean_reach": round(sum(float(m.get("reach", 0) or 0) for m in rows) / n, 2),
+            "saves": sum(int(m.get("saved", 0) or 0) for m in rows),
+            "shares": sum(int(m.get("shares", 0) or 0) for m in rows),
+            # Below this, a breakdown is a story about one or two posts.
+            "readable": n >= _MIN_DIMENSION_SAMPLES,
+        }
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]["mean_score"]))
+
+
+def dimension_report(dimensions: Optional[list] = None) -> dict:
+    """Every axis worth looking at, plus how much of the data carries it."""
+    samples = _load("samples.json", [])
+    dimensions = dimensions or ["kind", "local_hour", "subject", "cover_variant",
+                                "series", "translation", "hashtag_set"]
+    report = {"samples": len(samples), "dimensions": {}}
+    for dim in dimensions:
+        rows = reach_by(dim, samples)
+        if rows:
+            report["dimensions"][dim] = {
+                "coverage": sum(r["samples"] for r in rows.values()),
+                "readable": any(r["readable"] for r in rows.values()),
+                "values": rows,
+            }
+    return report
 
 
 # --- retention ---------------------------------------------------------------

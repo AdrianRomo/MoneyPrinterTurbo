@@ -569,9 +569,10 @@ def build(subject: Optional[str] = None, slides: int = 8,
 
     os.makedirs(out_dir, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    paths, credits, scales = [], [], []
+    paths, credits, scales, colours = [], [], [], []
     used: list[wikimedia.Photo] = []
     cover_source: Optional[Image.Image] = None
+    headline = ""
 
     for photo in ordered:
         if len(paths) >= slides:
@@ -594,6 +595,7 @@ def build(subject: Optional[str] = None, slides: int = 8,
         if not looks_ok:
             logger.warning(f"skipping {photo.title}: {why}")
             continue
+        colours.append(quality.aesthetics(source)["colour"])
         index = len(paths)
         if index == 0:
             from app.services import hashtags as _hashtags
@@ -626,7 +628,10 @@ def build(subject: Optional[str] = None, slides: int = 8,
         return None
 
     car = {"paths": paths, "subject": subject, "title": noun.title(),
-           "photos": used, "credits": credits, "scales": scales}
+           "photos": used, "credits": credits, "scales": scales,
+           # Kept for the publish variant: the cover hook and how flat the
+           # photography was are the two things worth reading back against reach.
+           "headline": headline, "colours": colours}
     # Closing CTA slide, built from the cover image so the set bookends.
     if len(paths) >= 3 and cover_source is not None:
         cta_path = os.path.join(out_dir, f"{stamp}-{subject}-zz-cta.jpg")
@@ -756,9 +761,20 @@ def publish(car: dict, publish_at=None) -> dict:
         media.append(up["media"])
 
     caption, set_id = build_caption(car)
+    # The subject and the cover hook are the two things most likely to decide
+    # whether a carousel is swiped, and neither was recorded anywhere. Both
+    # rotate, so neither can be recovered once the numbers arrive two days on.
+    variant = {
+        "format": "carousel",
+        "subject": car.get("subject"),
+        "cover_variant": car.get("headline"),
+        "slides": len(car.get("paths") or []),
+        "flattest_colour": round(min(car["colours"]), 1) if car.get("colours") else None,
+    }
     result = svc.schedule_post(media, caption, publish_at,
                                integration=integration["integration"],
-                               kind="carousel", set_id=set_id)
+                               kind="carousel", set_id=set_id,
+                               variant={k: v for k, v in variant.items() if v is not None})
     if result.get("success"):
         hashtags.mark_used(set_id)
     return result

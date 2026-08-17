@@ -12,9 +12,11 @@ Two rules this module exists to enforce:
    error that costs credibility outright. A reference that cannot be fetched is
    discarded, not guessed at.
 
-2. **Only public-domain translations.** KJV and WEB are public domain. NIV/ESV/
-   NLT are copyrighted with strict quoting limits and are not safe to post on an
-   account being grown commercially.
+2. **Only public-domain translations.** See PUBLIC_DOMAIN_TRANSLATIONS, every
+   entry of which was checked against bible-api.com's own licence field. The
+   default is WEBBE — modern English without WEB's "Yahweh is my shepherd".
+   NIV/ESV/NLT are copyrighted with strict quoting limits and are not safe to
+   post on an account being grown commercially.
 """
 
 from __future__ import annotations
@@ -1019,6 +1021,23 @@ def publish_card(card: dict, publish_at=None) -> dict:
             return upload
         media.append(upload["media"])
 
+    # What produced this card, recorded at publish time because it cannot be
+    # reconstructed later: the verse rotates, the series advances, and by the
+    # time the numbers arrive two days on, the card is just a JPEG. Reels have
+    # carried a variant since retention tracking; cards and carousels carried
+    # none, so reach could only ever be attributed to the hashtag set.
+    verse = card.get("verse")
+    variant = {
+        "format": kind,
+        "reference": getattr(verse, "reference", None),
+        "translation": getattr(verse, "translation", None),
+        "verse_chars": len(getattr(verse, "text", "") or "") or None,
+        "series": card.get("series_label"),
+        "twin_of_post": bool(card.get("twin_of_post")) or None,
+        "parts": len(paths) if len(paths) > 1 else None,
+    }
+    variant = {k: v for k, v in variant.items() if v is not None}
+
     if kind == "story":
         # Instagram stories take exactly one image each ("if it's a story, it can
         # have only one picture" — Postiz's own provider). A split passage is
@@ -1029,7 +1048,8 @@ def publish_card(card: dict, publish_at=None) -> dict:
             at = publish_at + timedelta(minutes=2 * i) if i else publish_at
             res = svc.schedule_post(item, card["caption"], at,
                                     integration=integration["integration"], kind=kind,
-                                    set_id=card.get("set_id") if i == 0 else None)
+                                    set_id=card.get("set_id") if i == 0 else None,
+                                    variant=variant if i == 0 else None)
             results.append(res)
             if not res.get("success"):
                 logger.error(f"story part {i + 1}/{len(media)} failed: "
@@ -1043,7 +1063,7 @@ def publish_card(card: dict, publish_at=None) -> dict:
         result = svc.schedule_post(media if len(media) > 1 else media[0],
                                    card["caption"], publish_at,
                                    integration=integration["integration"], kind=kind,
-                                   set_id=card.get("set_id"))
+                                   set_id=card.get("set_id"), variant=variant)
         result = dict(result)
         result["parts"] = len(media)
 
