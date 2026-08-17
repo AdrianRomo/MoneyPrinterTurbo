@@ -10,6 +10,7 @@ from openai.types.chat import ChatCompletion
 
 from app.config import config
 from app.models.llm_provider import DEFAULT_LLM_PROVIDER_ID, get_llm_provider
+from app.services import reel_script
 
 _max_retries = 5
 MIN_SCRIPT_PARAGRAPH_NUMBER = 1
@@ -580,7 +581,29 @@ def build_script_prompt(
 {video_script_prompt}
 """.rstrip()
 
+    # Appended last so the reel discipline outranks both the base prompt's
+    # paragraph count and any user requirement that would lengthen the script.
+    if reel_script.enabled():
+        prompt += "\n\n" + reel_script.guidance_block(video_subject)
+
     return prompt
+
+
+def _format_script_response(response: str) -> str:
+    # Clean the script
+    # Remove asterisks, hashes
+    response = response.replace("*", "")
+    response = response.replace("#", "")
+
+    # Remove markdown syntax
+    response = re.sub(r"\[.*\]", "", response)
+    response = re.sub(r"\(.*\)", "", response)
+
+    # Split the script into paragraphs
+    paragraphs = response.split("\n\n")
+
+    # Join the paragraphs into a single string
+    return "\n\n".join(paragraphs)
 
 
 def generate_script(
@@ -620,24 +643,7 @@ def generate_script(
         f"has_reference={bool(reference_content.strip())}"
     )
 
-    def format_response(response):
-        # Clean the script
-        # Remove asterisks, hashes
-        response = response.replace("*", "")
-        response = response.replace("#", "")
-
-        # Remove markdown syntax
-        response = re.sub(r"\[.*\]", "", response)
-        response = re.sub(r"\(.*\)", "", response)
-
-        # Split the script into paragraphs
-        paragraphs = response.split("\n\n")
-
-        # Select the specified number of paragraphs
-        # selected_paragraphs = paragraphs[:paragraph_number]
-
-        # Join the selected paragraphs into a single string
-        return "\n\n".join(paragraphs)
+    format_response = _format_script_response
 
     for i in range(_max_retries):
         try:
@@ -660,9 +666,46 @@ def generate_script(
             logger.warning(f"failed to generate video script, trying again... {i + 1}")
     if "Error: " in final_script:
         logger.error(f"failed to generate video script: {final_script}")
-    else:
-        logger.success(f"completed: \n{final_script}")
+        return final_script.strip()
+
+    if final_script and reel_script.enabled():
+        final_script = _shape_reel_script(final_script, prompt)
+
+    logger.success(f"completed: \n{final_script}")
     return final_script.strip()
+
+
+def _shape_reel_script(script: str, prompt: str) -> str:
+    """Hold a reel script to the rules that can actually be checked.
+
+    Models routinely ignore a character limit stated in the prompt, and return
+    one 40-word sentence when asked for a short hook. Both are worth one retry:
+    naming the specific overshoot corrects far more reliably than restating the
+    rule. The trim afterwards is only a backstop for length — nothing can repair
+    a missing hook after the fact, so that is reported rather than faked.
+    """
+    budget = reel_script.char_budget()
+    issues = reel_script.problems(script, budget)
+    if not issues:
+        logger.info(reel_script.report(script))
+        return script
+
+    logger.warning("reel script needs a rewrite: " + "; ".join(issues))
+    try:
+        retry = _generate_response(prompt=prompt + reel_script.correction_note(issues))
+    except Exception as exc:  # noqa: BLE001 - the trim below is the safety net
+        logger.warning(f"script rewrite failed: {_sanitize_error_message(exc)}")
+        retry = ""
+
+    retry = _format_script_response(retry).strip() if retry else ""
+    # Only take the rewrite if it is actually better: a retry that fixes the
+    # hook but blows the budget is not an improvement.
+    if retry and len(reel_script.problems(retry, budget)) < len(issues):
+        script = retry
+
+    script = reel_script.trim_to_budget(script, budget)
+    logger.info(reel_script.report(script))
+    return script
 
 
 def _strip_code_fence(text: str) -> str:
