@@ -33,7 +33,7 @@ tls_verify = true
 # Video Materials / 视频素材
 # -----------------------------------------------------------------------------
 
-# Available values: "pexels", "pixabay", "coverr", "local".
+# Available values: "pexels", "pixabay", "coverr", "storyblocks", "local".
 video_source = "pexels"
 
 # API key lists support key rotation. Use straight ASCII double quotes and
@@ -48,6 +48,23 @@ pixabay_api_keys = []
 
 # Register at https://coverr.co/developers?ctx=header_navigation
 coverr_api_keys = []
+
+# Storyblocks API v2 uses a public key + private HMAC key pair and requires a
+# project/user id for search and download requests. Keep empty unless you have
+# an active API agreement. The connector searches vertical, safe, non-editorial
+# footage and can optionally require explicit talent/property releases.
+storyblocks_public_key = ""
+storyblocks_private_key = ""
+storyblocks_project_id = ""
+storyblocks_user_id = ""
+storyblocks_quality = "HD"
+storyblocks_download_quality = "_1080p"
+storyblocks_results_per_page = 8
+storyblocks_max_duration = 30
+storyblocks_required_keywords = ""
+storyblocks_filtered_keywords = "text,logo,watermark,news,editorial"
+storyblocks_require_talent_release = false
+storyblocks_require_property_release = false
 
 # Optional TwelveLabs integration for semantic material ranking and video QA.
 # Install the optional dependency with: uv sync --extra twelvelabs
@@ -310,12 +327,77 @@ postiz_integration_id = ""
 # "instagram" for FB-linked Instagram, or "instagram-standalone".
 postiz_provider_type = "instagram"
 postiz_auto_schedule_enabled = false
-# Autonomous Article Mode scheduling spaces posts out instead of posting now.
+# Account-local itinerary. Postiz selects the next legal slot per type; the
+# scheduler decides which type is due. These defaults interleave a morning feed
+# post, daytime carousel, evening Reel, and three story windows.
+content_timezone = "America/Mexico_City"
+content_utc_offset_hours = -6
+postiz_daily_quota_post = 1
+postiz_daily_quota_carousel = 1
+postiz_daily_quota_reel = 1
+postiz_daily_quota_story = 3
+postiz_window_post = "06:30-07:45"
+postiz_window_carousel = "12:00-13:30"
+postiz_window_reel = "20:00-21:30"
+postiz_window_story = "08:15-09:00,14:00-15:00,21:45-22:30"
+content_scheduler_schedule_days_ahead = 1
+content_scheduler_carousel_attempts = 6
+# Comma-separated reliable Wikimedia subjects for the automated carousel lane.
+# Keeping the scheduler on broad landscape/nature searches avoids sparse
+# wildlife queries blocking the whole itinerary.
+content_scheduler_carousel_subjects = "mountains,auroras,sunsets,oceans,forests,deserts,rivers,storms,glaciers,night_sky,waterfalls,canyons,volcanoes,lakes,islands,clouds,wildflowers"
+# Fallback spacing used only for content types without a configured window.
 postiz_schedule_interval_hours = 2
 postiz_schedule_jitter_minutes = 30
 postiz_daily_post_cap = 8
 # Instagram setting sent as settings.post_type. Keep "post" for reels/feed.
 postiz_post_type = "post"
+
+# Quiet quote Reel mode renders one cinematic vertical clip with a centered
+# saveable quote and strips source audio from raw clips. Keep scheduling disabled
+# until the configured media directory contains raw, text-free footage.
+quote_reel_auto_schedule_enabled = false
+quote_reel_media_dir = ""
+# curated | comfyui | storyblocks | pexels | pixabay | coverr | stock | auto
+# "comfyui" generates the backdrop on the local GPU instead of searching stock —
+# the same move Article Mode made, and the closest match to the reference Reels.
+# "auto" tries curated, then comfyui, then storyblocks, then stock.
+quote_reel_media_source = "curated"
+quote_reel_stock_provider = "pexels" # used when quote_reel_media_source = "stock" or auto falls through
+quote_reel_target_seconds = 15
+# Drives the quote, the caption call-to-action, the fallback lines and the
+# default hashtags together. "English" or "Spanish"; anything else falls back to
+# English. Do not set this alone expecting the caption to follow — it does now,
+# but the hashtag SET (postiz hashtag rotation) is configured separately.
+quote_reel_default_language = "English"
+quote_reel_caption_hashtags = []
+quote_reel_hashtag_set = ""
+quote_reel_search_terms = []
+quote_reel_assume_curated_text_free = true
+quote_reel_assume_stock_text_free = true
+quote_reel_skip_stock_review_risk = true
+quote_reel_min_visual_contrast = 12
+quote_reel_storyblocks_clip_seconds = 6
+quote_reel_stock_clip_seconds = 6
+
+# Legibility. White serif needs a dark-ish backdrop; stock footage often is not.
+# The renderer washes the text band down toward _target_luma, up to _scrim_max
+# (0 = never darken). QC flags the reel for review when the band is still above
+# _max_text_band_luma after that wash.
+quote_reel_scrim_target_luma = 110
+quote_reel_scrim_max = 0.55
+quote_reel_max_text_band_luma = 150
+
+# A silent Reel gets scrolled past. Raw clip audio is always stripped; this mixes
+# a bed from the BGM library underneath instead.
+quote_reel_music_enabled = true
+quote_reel_music_file = ""
+quote_reel_music_volume = 0.22
+
+# Release checks, off by default. Stock metadata never carries an explicit talent
+# release, so turning these on flags every clip containing a person.
+quote_reel_require_talent_release = false
+quote_reel_require_property_release = false
 
 # -----------------------------------------------------------------------------
 # Article Mode / 文章模式 (automation-first news-to-video)

@@ -114,6 +114,21 @@ class TestTaskService(unittest.TestCase):
         self.assertEqual(kwargs["reference_content"], "Real article body about the outage.")
         self.assertTrue(kwargs["strict_source"])
 
+    def test_start_routes_quiet_quote_reel_mode(self):
+        params = VideoParams(
+            video_subject="Belleza ordinaria",
+            content_mode="quiet_quote_reel",
+        )
+
+        with patch(
+            "app.services.quote_reel.render_quote_reel",
+            return_value={"content_mode": "quiet_quote_reel"},
+        ) as render:
+            result = tm.start("task-id", params)
+
+        self.assertEqual(result["content_mode"], "quiet_quote_reel")
+        render.assert_called_once_with("task-id", params, stop_at="video")
+
     def test_generate_final_videos_forwards_clip_speed(self):
         """任务编排层必须把用户选择的画面速度传给视频合成服务。"""
         params = VideoParams(

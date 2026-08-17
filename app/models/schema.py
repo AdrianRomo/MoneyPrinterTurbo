@@ -144,7 +144,7 @@ class VideoParams(BaseModel):
     sonilo_bgm_prompt: str = Field(default="", max_length=2000)
 
     subtitle_enabled: Optional[bool] = True
-    subtitle_position: Optional[str] = _subtitle_cfg("subtitle_position", "bottom")  # top, bottom, center, custom
+    subtitle_position: Optional[str] = _subtitle_cfg("subtitle_position", "bottom")  # top, bottom, center, custom, template
     custom_position: float = _subtitle_cfg("custom_position", 70.0)
     font_name: Optional[str] = _subtitle_cfg("font_name", "STHeitiMedium.ttc")
     text_fore_color: Optional[str] = _subtitle_cfg("text_fore_color", "#FFFFFF")
@@ -172,7 +172,7 @@ class VideoParams(BaseModel):
     # commands that never set these keep running unchanged:
     #   content_mode="topic" + media_mode="videos_only" == legacy pipeline.
     # -----------------------------------------------------------------------
-    content_mode: Optional[str] = "topic"  # topic | article_url | article_feed
+    content_mode: Optional[str] = "topic"  # topic | article_url | article_feed | quiet_quote_reel
     media_mode: Optional[str] = "videos_only"  # videos_only | images_only | mixed
     article_url: Optional[str] = None  # source article for content_mode="article_url"
     article_id: Optional[str] = None  # persisted article for content_mode="article_feed"

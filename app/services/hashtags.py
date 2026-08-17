@@ -70,7 +70,11 @@ SETS: dict[str, dict] = {
 # composite weights them well above raw reach.
 SCORE_WEIGHTS = {"reach": 1.0, "saved": 12.0, "shares": 20.0, "likes": 2.0, "comments": 6.0}
 
-MIN_SAMPLES = 2      # a set needs this many measured posts before it can be exploited
+# A set needs this many measured posts before it can be exploited. Two was far
+# too few: at a reach of 2-9 with zero saves and zero shares on every post so
+# far, the composite score is reach-only noise, and exploiting on two samples of
+# noise locks the rotation onto whichever set happened to get shown twice.
+MIN_SAMPLES = 5
 EPSILON = 0.25       # fraction of posts that explore rather than exploit
 
 
@@ -148,13 +152,78 @@ def tags_for(set_id: str) -> list[str]:
     return list(SETS.get(set_id, {}).get("tags", []))
 
 
-def record_sample(set_id: str, media_id: str, metrics: dict) -> None:
+def record_sample(set_id: str, media_id: str, metrics: dict,
+                  variant: Optional[dict] = None) -> None:
     """Called by the insights collector once a post's numbers are in."""
     samples = _load("samples.json", [])
     if any(s.get("media_id") == media_id for s in samples):
         return
-    samples.append({"set_id": set_id, "media_id": media_id, "metrics": metrics})
+    sample = {"set_id": set_id, "media_id": media_id, "metrics": metrics}
+    if variant:
+        sample["variant"] = variant
+    samples.append(sample)
     _save("samples.json", samples[-500:])
+
+
+# --- retention ---------------------------------------------------------------
+#
+# Watch time is the number Reels are actually ranked on, and the only one that
+# means anything at a reach of 2-9: reach and follows are too sparse to read,
+# but "did this person watch to the end" is measurable on a single viewer.
+
+WATCH_TIME_MS = "ig_reels_avg_watch_time"
+TOTAL_WATCH_MS = "ig_reels_video_view_total_time"
+
+
+def completion_of(sample: dict) -> Optional[float]:
+    """Average watch time as a fraction of the reel's length, if both are known.
+
+    This is the closest thing to a completion rate the API will give us — and it
+    is why the variant records the video's duration at publish time. Without the
+    denominator, "watched 8 seconds" is unreadable: superb for a 9-second reel,
+    dismal for a 70-second one.
+    """
+    watch_ms = (sample.get("metrics") or {}).get(WATCH_TIME_MS)
+    seconds = (sample.get("variant") or {}).get("video_seconds")
+    try:
+        watch_seconds = float(watch_ms) / 1000.0
+        seconds = float(seconds)
+    except (TypeError, ValueError):
+        return None
+    if seconds <= 0:
+        return None
+    return watch_seconds / seconds
+
+
+def retention_report() -> dict:
+    """Watch time grouped by the treatment that produced it."""
+    samples = [s for s in _load("samples.json", [])
+               if (s.get("metrics") or {}).get(WATCH_TIME_MS) is not None]
+    if not samples:
+        return {"samples": 0, "note": "no retention data collected yet"}
+
+    by_variant: dict[str, list[dict]] = {}
+    for sample in samples:
+        variant = sample.get("variant") or {}
+        # Group by treatment, not by post: "brand script + brand captions" is
+        # the question, and the individual reel is only a sample of it.
+        key = "|".join(
+            f"{k}={variant.get(k)}" for k in ("script_style", "subtitle_renderer", "subtitle_cadence")
+        ) or "unrecorded"
+        by_variant.setdefault(key, []).append(sample)
+
+    out = {"samples": len(samples), "variants": {}}
+    for key, group in by_variant.items():
+        watch = [float(s["metrics"][WATCH_TIME_MS]) / 1000.0 for s in group]
+        completions = [c for c in (completion_of(s) for s in group) if c is not None]
+        entry = {
+            "samples": len(group),
+            "mean_watch_seconds": round(sum(watch) / len(watch), 2),
+        }
+        if completions:
+            entry["mean_completion"] = round(sum(completions) / len(completions), 3)
+        out["variants"][key] = entry
+    return out
 
 
 # --- caption assembly --------------------------------------------------------

@@ -24,7 +24,18 @@ from app.config import config
 
 _INSTAGRAM_PROVIDERS = {"instagram", "instagram-standalone"}
 _MIN_SCHEDULE_LEAD = timedelta(minutes=30)
-_POST_LOOKAHEAD_DAYS = 14
+
+# How far ahead select_publish_at will SEARCH for a free slot. This is a ceiling
+# on the search, not a policy on how far to queue — that policy lives in
+# content_scheduler_schedule_days_ahead, which is deliberately much shorter.
+# Raised from 14 to a month so a slot can be found that far out when something
+# asks for one; nothing queues deeper merely because this is larger.
+#
+# Safe at a month because the daily-cap query underneath is a plain date-range
+# read with no pagination envelope (the API returns only `posts`), so counting
+# a month of posts is the same operation as counting a fortnight of them, just
+# over a longer list. Verified against the live instance on 2026-08-17.
+_DEFAULT_POST_LOOKAHEAD_DAYS = 31
 
 
 def _cfg_bool(key: str, default: bool) -> bool:
@@ -39,6 +50,11 @@ def _cfg_int(key: str, default: int) -> int:
         return int(config.app.get(key, default))
     except (TypeError, ValueError):
         return default
+
+
+def _post_lookahead_days() -> int:
+    """How many days ahead to search for a slot. At least one day."""
+    return max(1, _cfg_int("postiz_post_lookahead_days", _DEFAULT_POST_LOOKAHEAD_DAYS))
 
 
 def _cfg_str(key: str, default: str) -> str:
@@ -382,15 +398,23 @@ class PostizService:
     @classmethod
     def _record_publish(cls, kind: str, publish_at: datetime,
                         set_id: Optional[str] = None,
-                        post_id: Optional[str] = None) -> None:
+                        post_id: Optional[str] = None,
+                        variant: Optional[dict] = None) -> None:
         entries = cls._load_publish_log()
         # The quota day is the LOCAL day (see _local_date): `at` stays UTC so the
         # instant is unambiguous, `date` is the civil day the quota is about.
-        entries.append({"kind": kind, "date": _local_date(publish_at).isoformat(),
-                        "at": _utc_iso(publish_at),
-                        # set_id/post_id let collect-insights.sh attribute reach
-                        # back to the hashtag set that was used.
-                        "set_id": set_id, "post_id": post_id})
+        entry = {"kind": kind, "date": _local_date(publish_at).isoformat(),
+                 "at": _utc_iso(publish_at),
+                 # set_id/post_id let collect-insights.sh attribute reach
+                 # back to the hashtag set that was used.
+                 "set_id": set_id, "post_id": post_id}
+        if variant:
+            # What treatment produced this post — script length, hook, renderer
+            # flags, duration. Recorded at publish time because it cannot be
+            # reconstructed afterwards: config moves on, and the reel is just a
+            # file by the time the numbers arrive two days later.
+            entry["variant"] = variant
+        entries.append(entry)
         # 120 days is plenty for a daily quota and keeps the file small.
         cutoff = (_local_date(datetime.now(timezone.utc)) - timedelta(days=120)).isoformat()
         entries = [e for e in entries if str(e.get("date", "")) >= cutoff]
@@ -534,12 +558,12 @@ class PostizService:
             # The cap is a daily budget — what has gone out already is exactly
             # what it has to count.
             window_start = _local_midnight_utc(_local_date(now))
-            window_end = now + timedelta(days=_POST_LOOKAHEAD_DAYS)
+            window_end = now + timedelta(days=_post_lookahead_days())
             scheduled = self.list_posts(window_start, window_end)
             if not scheduled.get("success"):
                 return scheduled
             existing = self._posts_for_integration(scheduled["posts"])
-            for day_offset in range(_POST_LOOKAHEAD_DAYS):
+            for day_offset in range(_post_lookahead_days()):
                 on_date = _local_date(now + timedelta(days=day_offset))
                 used = self._count_kind_on(kind, on_date)
                 if type_quota is not None and used >= type_quota:
@@ -562,13 +586,13 @@ class PostizService:
             return slot
         candidate = max(minimum_candidate, slot["date"])
 
-        window_end = now + timedelta(days=_POST_LOOKAHEAD_DAYS)
+        window_end = now + timedelta(days=_post_lookahead_days())
         scheduled = self.list_posts(now, window_end)
         if not scheduled.get("success"):
             return scheduled
         existing = self._posts_for_integration(scheduled["posts"])
 
-        for _ in range(_POST_LOOKAHEAD_DAYS):
+        for _ in range(_post_lookahead_days()):
             candidate_day = _local_date(candidate)
             same_day = [dt for dt in existing if _local_date(dt) == candidate_day]
             # Per-type quota, counted from our own ledger (see __init__).
@@ -606,6 +630,7 @@ class PostizService:
         integration: Optional[dict] = None,
         kind: Optional[str] = None,
         set_id: Optional[str] = None,
+        variant: Optional[dict] = None,
     ) -> dict:
         caption = (caption or "").strip()
         if not caption:
@@ -687,7 +712,8 @@ class PostizService:
             return self._failure("Postiz create post response did not include postId")
         # Record against the per-type quota only once the post really exists.
         if kind:
-            self._record_publish(kind, publish_at, set_id=set_id, post_id=post_id)
+            self._record_publish(kind, publish_at, set_id=set_id, post_id=post_id,
+                                 variant=variant)
         logger.info(
             "Postiz post scheduled: "
             f"post_id={post_id}, integration_id={self.integration_id}, "
@@ -708,6 +734,8 @@ class PostizService:
         publish_at: Optional[datetime] = None,
         *,
         now: Optional[datetime] = None,
+        variant: Optional[dict] = None,
+        set_id: Optional[str] = None,
     ) -> dict:
         if not self.is_auto_schedule_configured():
             return self._failure("Postiz auto-scheduling is not configured")
@@ -736,6 +764,8 @@ class PostizService:
             publish_at,
             integration=integration["integration"],
             kind="reel",
+            variant=variant,
+            set_id=set_id,
         )
         if not scheduled.get("success"):
             return scheduled
@@ -746,5 +776,18 @@ class PostizService:
 postiz_service = PostizService()
 
 
-def schedule_video(video_path: str, caption: str, publish_at: Optional[datetime] = None) -> dict:
-    return postiz_service.schedule_video(video_path, caption, publish_at)
+def schedule_video(
+    video_path: str,
+    caption: str,
+    publish_at: Optional[datetime] = None,
+    *,
+    variant: Optional[dict] = None,
+    set_id: Optional[str] = None,
+) -> dict:
+    return postiz_service.schedule_video(
+        video_path,
+        caption,
+        publish_at,
+        variant=variant,
+        set_id=set_id,
+    )

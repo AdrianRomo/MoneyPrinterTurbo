@@ -269,7 +269,7 @@ def _render_cluster(
         assessment, settings, mode, sensitive=bool(outcome.get("sensitive"))
     )
     if can_publish and repo.count_publications() < settings.max_publications_per_day:
-        publish_result = _publish(task_id, script)
+        publish_result = _publish(task_id, script, cluster)
         published = bool(publish_result.get("success"))
         if published:
             provider = publish_result.get("provider") or "publisher"
@@ -291,6 +291,22 @@ def _render_cluster(
     if publish_result:
         result["publish_result"] = publish_result
     return result
+
+
+def _with_series_line(caption: str, part: Optional[dict]) -> str:
+    """Lead the caption with the series line, e.g. 'Ordinary Grace, no. 4'.
+
+    First line, because Instagram indexes caption text for search and shows the
+    first line before the fold — it is the only place a viewer reliably reads.
+    """
+    from app.services import series
+
+    line = series.reel_label(part)
+    if not line or not caption.strip():
+        return caption
+    if caption.lstrip().lower().startswith(line.lower()):
+        return caption
+    return f"{line}\n\n{caption}".strip()[:2200]
 
 
 def _caption_for_script(script) -> str:
@@ -321,7 +337,38 @@ def _caption_for_script(script) -> str:
     return caption[:2200].strip()
 
 
-def _publish(task_id: str, script) -> dict:
+def _video_seconds(path: str) -> Optional[float]:
+    try:
+        from moviepy import VideoFileClip
+
+        with VideoFileClip(path) as clip:
+            return round(float(clip.duration), 2)
+    except Exception as exc:  # noqa: BLE001 - a missing duration is not fatal
+        logger.warning(f"could not read duration of {path}: {exc}")
+        return None
+
+
+def _variant_of(video_path: str, narration: str, hook: str) -> dict:
+    """What treatment produced this reel, recorded at publish time.
+
+    Watch time two days later is unreadable without it: eight seconds watched is
+    superb on a 9-second reel and dismal on a 70-second one, and "which of these
+    changes helped" is unanswerable if nobody wrote down which ones were on.
+    """
+    from app.config import config
+
+    return {
+        "video_seconds": _video_seconds(video_path),
+        "script_chars": len(narration or ""),
+        "hook": (hook or "")[:80],
+        "script_style": str(config.app.get("script_style", "default")),
+        "subtitle_renderer": str(config.app.get("subtitle_renderer", "moviepy")),
+        "subtitle_cadence": str(config.app.get("subtitle_cadence", "punctuation")),
+        "voice": str(config.app.get("article_voice_name", "")).split(":")[-1][:40],
+    }
+
+
+def _publish(task_id: str, script, cluster: Optional[ArticleCluster] = None) -> dict:
     """Auto-publish or schedule a rendered Article Mode video."""
     try:
         from app.services import state as sm
@@ -344,11 +391,33 @@ def _publish(task_id: str, script) -> dict:
             # untouched render on any failure, so this can never cost a post.
             from app.services import reel_hook
 
-            hook_text = reel_hook.generate_hook(
-                getattr(cluster, "title", "") or script[:80], script)
+            # The subject comes from the script, then the cluster. `script` is a
+            # GeneratedScript, not a string, and ArticleCluster has no `title` —
+            # reading either as one raised before schedule_video was ever called,
+            # which silently disabled auto-publish entirely (see runbook).
+            subject = (
+                str(getattr(script, "title", "") or "").strip()
+                or str(getattr(cluster, "normalized_title", "") or "").strip()
+            )
+            narration = script.narration_text() if hasattr(script, "narration_text") else str(script)
+            hook_text = reel_hook.generate_hook(subject, narration)
             video_for_post = reel_hook.add_hook(videos[0], hook_text)
-            result = postiz.schedule_video(video_for_post, caption)
+
+            from app.services import series
+
+            part = series.reel_current()
+            variant = _variant_of(video_for_post, narration, hook_text)
+            if part:
+                variant["series"] = series.reel_label(part)
+            result = postiz.schedule_video(
+                video_for_post, _with_series_line(caption, part), variant=variant,
+            )
             result["provider"] = "postiz"
+            # Count the number only once the post really exists, for the same
+            # reason the card series does: a failed publish must not burn a
+            # number and leave a gap in the run.
+            if result.get("success"):
+                series.reel_advance()
             return result
 
         if not (

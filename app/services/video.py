@@ -41,6 +41,7 @@ from app.models.schema import (
     VideoTransitionMode,
 )
 from app.services import bgm as bgm_service
+from app.services import subtitle_style
 from app.services.utils import video_effects
 from app.utils import file_security, utils
 
@@ -1508,6 +1509,54 @@ def generate_video(
             return "#000000" if params.text_background_color else None
         return params.text_background_color
 
+    def create_brand_text_clip(subtitle_item, background_frame=None):
+        """Caption rendered through the card type system (see subtitle_style)."""
+        (start, end), phrase = subtitle_item[0], subtitle_item[1]
+
+        # Where the overlay will land, so the scrim can be measured against the
+        # pixels actually behind the glyphs rather than against the whole frame.
+        overlay_h = subtitle_style.cue_height(phrase, video_width)
+        if not overlay_h:
+            return None
+        if params.subtitle_position == "template":
+            # Where the reference Reels put their text: just above centre, so a
+            # narrated reel and a quote reel read as the same account.
+            y = int(video_height * subtitle_style.TEMPLATE_CENTER_RATIO - overlay_h / 2)
+            y = max(10, min(y, video_height - overlay_h - 10))
+        elif params.subtitle_position == "top":
+            y = int(video_height * 0.05)
+        elif params.subtitle_position == "custom":
+            y = int((video_height - overlay_h) * (params.custom_position / 100))
+            y = max(10, min(y, video_height - overlay_h - 10))
+        elif params.subtitle_position == "center":
+            y = int((video_height - overlay_h) / 2)
+        else:  # bottom
+            y = int(video_height * 0.95 - overlay_h)
+
+        rendered = subtitle_style.render_cue(
+            phrase, video_width, video_height,
+            background=background_frame, background_offset=(0, y),
+        )
+        if rendered is None:
+            return None
+
+        clip = (
+            ImageClip(rendered, transparent=True)
+            .with_start(start)
+            .with_end(end)
+            .with_duration(end - start)
+        )
+        # A hard cut announces itself; a short fade and an 8px rise read as
+        # considered. `pos` is evaluated in the clip's own time, so t starts at 0.
+        rise = subtitle_style.RISE_PIXELS
+        fade = subtitle_style.FADE_SECONDS
+        clip = clip.with_position(
+            lambda t: ("center", y + rise * max(0.0, 1.0 - t / fade))
+        )
+        if fade > 0:
+            clip = clip.with_effects([vfx.CrossFadeIn(fade)])
+        return clip
+
     def create_text_clip(subtitle_item):
         params.font_size = int(params.font_size)
         params.stroke_width = int(params.stroke_width)
@@ -1730,9 +1779,31 @@ def generate_video(
                     make_textclip=make_textclip,
                 )
             )
+            brand_captions = subtitle_style.enabled()
+            if brand_captions:
+                logger.info("  ⑥ captions: brand renderer (typography + adaptive scrim)")
             text_clips = []
             for item in sub.subtitles:
-                clip = create_text_clip(subtitle_item=item)
+                clip = None
+                if brand_captions:
+                    # Sample the frame the cue actually sits on, at its midpoint.
+                    frame = None
+                    try:
+                        midpoint = (item[0][0] + item[0][1]) / 2.0
+                        frame = source_video_clip.get_frame(
+                            min(midpoint, max(0.0, source_video_clip.duration - 0.05))
+                        )
+                    except Exception as exc:  # noqa: BLE001 - default scrim covers it
+                        logger.warning(f"could not sample frame for caption scrim: {exc}")
+                    try:
+                        clip = create_brand_text_clip(item, background_frame=frame)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            f"brand caption renderer failed, falling back to MoviePy: {exc}"
+                        )
+                        clip = None
+                if clip is None:
+                    clip = create_text_clip(subtitle_item=item)
                 text_clips.append(clip)
             video_clip = CompositeVideoClip([video_clip, *text_clips])
             clip_stack.callback(video_clip.close)
@@ -1877,6 +1948,7 @@ def video_to_normalized_clip(
     duration: float,
     video_aspect: VideoAspect = VideoAspect.portrait,
     threads: int = 2,
+    preserve_audio: bool = False,
 ) -> str:
     """Scale/letterbox a video to the target aspect and fit it to ``duration``
     (looping if shorter, trimming if longer). Used for mixed-media timelines."""
@@ -1886,7 +1958,7 @@ def video_to_normalized_clip(
     source = None
     fitted = None
     try:
-        source = _open_video_clip_quietly(video_path)
+        source = _open_video_clip_quietly(video_path, audio=preserve_audio)
         clip_w, clip_h = source.size
         if source.duration < duration:
             source = source.with_effects([vfx.Loop(duration=duration)])

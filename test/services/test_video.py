@@ -50,6 +50,19 @@ class _FakeMoviePyClip:
         return self.with_audio_result
 
 
+class _FakeNormalizeClip:
+    def __init__(self):
+        self.duration = 5.0
+        self.size = (720, 1280)
+
+    def subclipped(self, _start, _end):
+        return self
+
+    def with_duration(self, duration):
+        self.duration = duration
+        return self
+
+
 class TestVideoService(unittest.TestCase):
     def setUp(self):
         self.original_app_config = dict(config.app)
@@ -152,6 +165,27 @@ class TestVideoService(unittest.TestCase):
         self.assertEqual(voice_source.close_calls, 1)
         self.assertEqual(bgm_source.close_calls, 1)
         self.assertEqual(final_video.close_calls, 1)
+
+    def test_video_to_normalized_clip_can_preserve_source_audio(self):
+        source = _FakeNormalizeClip()
+        fitted = _FakeNormalizeClip()
+
+        with (
+            patch.object(vd, "_open_video_clip_quietly", return_value=source) as open_clip,
+            patch.object(vd, "_fit_clip_to_frame", return_value=fitted),
+            patch.object(vd, "_write_videofile_with_codec_fallback") as writer,
+            patch.object(vd, "_get_configured_video_codec", return_value="libx264"),
+        ):
+            result = vd.video_to_normalized_clip(
+                "input.mp4",
+                "output.mp4",
+                4.0,
+                preserve_audio=True,
+            )
+
+        self.assertEqual(result, "output.mp4")
+        open_clip.assert_called_once_with("input.mp4", audio=True)
+        writer.assert_called_once()
 
     def test_generate_video_keeps_output_and_reports_failed_bgm_mix(self):
         """BGM 打开失败时仍应只写一次无 BGM 视频，并返回 False。"""

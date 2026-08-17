@@ -21,6 +21,7 @@ from app.services import (
     material,
     sonilo,
     subtitle,
+    subtitle_cadence,
     task_artifacts,
     twelvelabs,
     video,
@@ -618,8 +619,14 @@ def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
 
     if subtitle_provider == "whisper":
         subtitle.create(audio_file=audio_file, subtitle_file=subtitle_path)
-        logger.info("\n\n## correcting subtitle")
-        subtitle.correct(subtitle_file=subtitle_path, video_script=video_script)
+        # correct() rewrites cues to match whole script lines, which is exactly
+        # what word-level cadence exists to avoid — running it would merge the
+        # short cues straight back into sentence-long ones.
+        if subtitle_cadence.enabled():
+            logger.info("\n\n## keeping word-level cue timing (cadence enabled)")
+        else:
+            logger.info("\n\n## correcting subtitle")
+            subtitle.correct(subtitle_file=subtitle_path, video_script=video_script)
 
     subtitle_lines = subtitle.file_to_subtitles(subtitle_path)
     if not subtitle_lines:
@@ -1403,6 +1410,11 @@ def start(
             return article_pipeline.render_article_video(
                 task_id, params, stop_at=stop_at
             )
+        if content_mode == "quiet_quote_reel":
+            # Imported lazily to keep the legacy topic pipeline import surface unchanged.
+            from app.services import quote_reel
+
+            return quote_reel.render_quote_reel(task_id, params, stop_at=stop_at)
         return _run_pipeline(
             task_id,
             params,

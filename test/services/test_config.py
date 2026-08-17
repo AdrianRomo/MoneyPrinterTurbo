@@ -22,7 +22,13 @@ class TestConfigPersistence:
         assert example_config["listen_host"] == "0.0.0.0"
         assert example_config["listen_port"] == 8080
         assert example_config["log_level"] == "DEBUG"
-        assert app_config["video_source"] in {"pexels", "pixabay", "coverr", "local"}
+        assert app_config["video_source"] in {
+            "pexels",
+            "pixabay",
+            "coverr",
+            "storyblocks",
+            "local",
+        }
         assert "match_materials_to_script" in app_config
         assert example_config["whisper"]["device"] == "cpu"
 
@@ -73,14 +79,63 @@ class TestConfigPersistence:
             "postiz_integration_id",
             "postiz_provider_type",
             "postiz_auto_schedule_enabled",
+            "content_timezone",
+            "content_utc_offset_hours",
+            "postiz_daily_quota_post",
+            "postiz_daily_quota_carousel",
+            "postiz_daily_quota_reel",
+            "postiz_daily_quota_story",
+            "postiz_window_post",
+            "postiz_window_carousel",
+            "postiz_window_reel",
+            "postiz_window_story",
+            "content_scheduler_schedule_days_ahead",
+            "content_scheduler_carousel_attempts",
+            "content_scheduler_carousel_subjects",
             "postiz_schedule_interval_hours",
             "postiz_schedule_jitter_minutes",
             "postiz_daily_post_cap",
             "postiz_post_type",
+            "quote_reel_auto_schedule_enabled",
+            "quote_reel_media_dir",
+            "quote_reel_media_source",
+            "quote_reel_stock_provider",
+            "quote_reel_target_seconds",
+            "quote_reel_default_language",
+            "quote_reel_caption_hashtags",
+            "quote_reel_hashtag_set",
+            "quote_reel_search_terms",
+            "quote_reel_assume_curated_text_free",
+            "quote_reel_assume_stock_text_free",
+            "quote_reel_skip_stock_review_risk",
+            "quote_reel_min_visual_contrast",
+            "quote_reel_storyblocks_clip_seconds",
+            "quote_reel_stock_clip_seconds",
         }
 
         assert postiz_keys <= example_config["app"].keys()
         assert postiz_keys.isdisjoint(example_config.get("ui", {}).keys())
+
+    def test_storyblocks_settings_belong_to_app_section(self):
+        """Storyblocks API settings must be configured under app, not UI."""
+        example_config = self._load_example_config()
+        storyblocks_keys = {
+            "storyblocks_public_key",
+            "storyblocks_private_key",
+            "storyblocks_project_id",
+            "storyblocks_user_id",
+            "storyblocks_quality",
+            "storyblocks_download_quality",
+            "storyblocks_results_per_page",
+            "storyblocks_max_duration",
+            "storyblocks_required_keywords",
+            "storyblocks_filtered_keywords",
+            "storyblocks_require_talent_release",
+            "storyblocks_require_property_release",
+        }
+
+        assert storyblocks_keys <= example_config["app"].keys()
+        assert storyblocks_keys.isdisjoint(example_config.get("ui", {}).keys())
 
     def test_save_config_uses_parseable_atomic_output(self):
         """

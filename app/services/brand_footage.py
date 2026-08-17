@@ -84,11 +84,17 @@ def _tokens(text: str) -> set[str]:
     return set(re.findall(r"[a-z]+", (text or "").lower()))
 
 
-def subject_for(term: str, index: int = 0) -> str:
+def subject_for(term: str, index: int = 0, avoid: Optional[set] = None) -> str:
     """Pick an on-brand subject for a scene.
 
     Deterministic in (term, index) so a retried render reuses the same look, and
     `index` walks the matched mood's list so one Reel does not repeat a frame.
+
+    `avoid` is what actually delivers that last promise. Offsetting by the term's
+    hash means two scenes with *different* terms can still land on the same
+    subject — "quiet morning kitchen"@0 and "hope at first light"@3 both resolve
+    to the misty meadow, which in a four-shot Reel is a visible repeat. Passing
+    the subjects already used walks on to the next free one.
     """
     words = _tokens(term)
     best, best_score = None, 0
@@ -101,10 +107,17 @@ def subject_for(term: str, index: int = 0) -> str:
         return _FALLBACK
     # Offset by the term's own hash so different scenes in one mood diverge.
     offset = sum(ord(c) for c in (term or "")) + index
+    taken = set(avoid or ())
+    for step in range(len(subjects)):
+        candidate = subjects[(offset + step) % len(subjects)]
+        if candidate not in taken:
+            return candidate
+    # More scenes than the mood has subjects: a repeat is now unavoidable.
     return subjects[offset % len(subjects)]
 
 
-def generate_frame(term: str, index: int = 0, save_dir: str = "") -> Optional[str]:
+def generate_frame(term: str, index: int = 0, save_dir: str = "",
+                   avoid: Optional[set] = None) -> Optional[str]:
     """Generate one on-brand still and return its local path (or None).
 
     Cached by subject: a script expands each concept into several near-identical
@@ -112,7 +125,7 @@ def generate_frame(term: str, index: int = 0, save_dir: str = "") -> Optional[st
     and those collapse onto the same allowlisted subject. Regenerating per term
     would cost a diffusion pass each for the same picture.
     """
-    subject = subject_for(term, index)
+    subject = subject_for(term, index, avoid)
     save_dir = save_dir or utils.storage_dir("cache_images", create=True)
     os.makedirs(save_dir, exist_ok=True)
     path = os.path.join(save_dir, f"brand-{utils.md5(f'{subject}|{index}')}.jpg")
@@ -133,7 +146,7 @@ def generate_frame(term: str, index: int = 0, save_dir: str = "") -> Optional[st
     return path
 
 
-def asset_for_scene(term: str, beat_index: int):
+def asset_for_scene(term: str, beat_index: int, avoid: Optional[set] = None):
     """One generated frame for one scene, guaranteed distinct per scene.
 
     `beat_index` walks the mood's subject list and is part of the cache key, so
@@ -144,7 +157,7 @@ def asset_for_scene(term: str, beat_index: int):
     """
     from app.models.article import MediaAsset
 
-    path = generate_frame(term, index=beat_index)
+    path = generate_frame(term, index=beat_index, avoid=avoid)
     if not path:
         return None
     return MediaAsset(
@@ -155,7 +168,7 @@ def asset_for_scene(term: str, beat_index: int):
         height=1344,
         asset_id=os.path.basename(path),
         creator="",
-        metadata_text=subject_for(term, beat_index),
+        metadata_text=subject_for(term, beat_index, avoid),
         license_name="Locally generated (SDXL)",
         license_url="",
         attribution_text="",

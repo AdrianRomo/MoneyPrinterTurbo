@@ -2,12 +2,12 @@
 
 The per-type quotas in postiz.py are ceilings, not a schedule: they stop one
 format from eating another's slot, but nothing ever *asks* for a verse card or
-a carousel. Article Mode's worker only ever produces Reels. This module is what
-makes the other three formats actually happen.
+a carousel. Article Mode's worker produces article Reels; this module also
+keeps a quiet quote Reel lane alive when that format is due.
 
 Run it a few times a day (see mpt-content-scheduler.timer). Each run asks, per
-format: is today's quota unspent, and for carousels has enough time passed since
-the last one? If so it generates and hands the result to Postiz, which picks the
+format: is today's quota unspent, and is the format enabled? If so it generates
+and hands the result to Postiz, which picks the
 actual moment via select_publish_at(kind=...) — a uniform-random time inside
 that format's publishing window.
 
@@ -27,7 +27,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 from loguru import logger
@@ -48,15 +50,47 @@ from app.services.postiz import PostizService, _local_date
 # stories need three runs, and by the second run a single shared window is
 # mostly in the past.
 PLAN = {
-    "post":     {"per_day": 1},
-    "story":    {"per_day": 3},
+    "post": {"per_day": 1},
     "carousel": {"per_day": 1},
+    # This shares the real Reel quota/window with Article Mode. If Article Mode
+    # has already scheduled a Reel today, quiet quote Reels wait for tomorrow.
+    "reel": {"per_day": 1},
+    "story": {"per_day": 3},
 }
 
 STORY_THEMES = ["peace and rest", "trust in the everyday", "gratitude",
                 "hope for tomorrow", "stillness", "God's nearness"]
 POST_THEMES = ["hope and trust", "encouragement in hard seasons", "gratitude",
                "faith in ordinary days", "peace", "new beginnings"]
+# Subjects, not quotes — the language of the finished Reel comes from
+# quote_reel_default_language, so keep these as neutral English prompts.
+QUOTE_REEL_THEMES = [
+    "God in the ordinary",
+    "faith in ordinary days",
+    "quiet beauty and grace",
+    "peace in simple moments",
+    "God's nearness in daily life",
+    "gratitude for small things",
+]
+CAROUSEL_SUBJECTS = [
+    "mountains",
+    "auroras",
+    "sunsets",
+    "oceans",
+    "forests",
+    "deserts",
+    "rivers",
+    "storms",
+    "glaciers",
+    "night_sky",
+    "waterfalls",
+    "canyons",
+    "volcanoes",
+    "lakes",
+    "islands",
+    "clouds",
+    "wildflowers",
+]
 
 
 def _cfg_int(key: str, default: int) -> int:
@@ -64,6 +98,43 @@ def _cfg_int(key: str, default: int) -> int:
         return int(config.app.get(key, default))
     except (TypeError, ValueError):
         return default
+
+
+def _cfg_bool(key: str, default: bool) -> bool:
+    value = config.app.get(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _cfg_list(key: str, default: list[str]) -> list[str]:
+    value = config.app.get(key)
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",")]
+    elif isinstance(value, (list, tuple)):
+        items = [str(item).strip() for item in value]
+    else:
+        return list(default)
+    return [item for item in items if item] or list(default)
+
+
+def _parse_publish_at(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc)
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(
+            timezone.utc
+        )
+    except ValueError:
+        return None
+
+
+def _format_enabled(kind: str) -> tuple[bool, str]:
+    if kind == "reel" and not _cfg_bool("quote_reel_auto_schedule_enabled", False):
+        return False, "quote reel auto-scheduling disabled"
+    return True, "enabled"
 
 
 def _days_since_last(kind: str) -> int:
@@ -84,13 +155,43 @@ def due(kind: str, now_utc: datetime, svc: PostizService) -> tuple[bool, str]:
     Only decides *whether*; postiz.select_publish_at decides *when*, by drawing
     a random time inside the format's window.
     """
+    enabled, enabled_reason = _format_enabled(kind)
+    if not enabled:
+        return False, enabled_reason
+
     plan = PLAN[kind]
+    target = min(plan["per_day"], svc.type_quotas.get(kind, 0))
+    if target <= 0:
+        return False, f"{kind} quota is zero"
+
     # The local civil day, not the UTC one: with a -6 offset the UTC day rolls
     # over at 18:00 local, which handed every evening slot a fresh empty quota.
     today = _local_date(now_utc)
-    used = PostizService._count_kind_on(kind, today)
-    if used >= min(plan["per_day"], svc.type_quotas.get(kind, 0)):
-        return False, f"already published {used} today (target {plan['per_day']})"
+    slot = svc.select_publish_at(now=now_utc, kind=kind)
+    if not slot.get("success"):
+        return False, slot.get("error") or f"no {kind} slot available"
+    publish_at = _parse_publish_at(slot.get("publish_at"))
+    if publish_at is None:
+        return False, f"no valid {kind} publish_at returned"
+    quota_day = _local_date(publish_at)
+    # How deep the scheduler is willing to QUEUE, as opposed to how far Postiz
+    # will search for a free slot (postiz_post_lookahead_days, a month). Raised
+    # from 1 to a week so the queue can absorb a night the GPU was busy, and
+    # deliberately stopped there rather than following the lookahead out to a
+    # month: at the account's current reach the format is not proven, and a
+    # month of queued posts is a month of commitment to a format that may need
+    # to change next week. The month-deep resource is the footage pool, which
+    # costs nothing to discard.
+    horizon_days = max(0, _cfg_int("content_scheduler_schedule_days_ahead", 7))
+    horizon = today + timedelta(days=horizon_days)
+    if quota_day > horizon:
+        return (
+            False,
+            f"next {kind} slot is {quota_day}, outside {horizon_days}d scheduler horizon",
+        )
+    used = PostizService._count_kind_on(kind, quota_day)
+    if used >= target:
+        return False, f"already scheduled {used} {kind} for {quota_day} (target {target})"
 
     interval = plan.get("min_interval_days")
     if interval:
@@ -106,17 +207,65 @@ def due(kind: str, now_utc: datetime, svc: PostizService) -> tuple[bool, str]:
 
 def produce(kind: str) -> dict:
     """Generate and publish one item of this format."""
-    import random
-
+    from app.models.schema import VideoParams
     from app.services import carousel as ca
+    from app.services import quote_reel
     from app.services import series
     from app.services import verse_card as vc
 
     if kind == "carousel":
-        car = ca.build(slides=_cfg_int("carousel_slides", 8))
-        if not car:
-            return {"success": False, "error": "carousel build failed"}
-        return ca.publish(car)
+        slides = _cfg_int("carousel_slides", 8)
+        attempts = max(1, _cfg_int("content_scheduler_carousel_attempts", 6))
+        subjects = [
+            subject
+            for subject in _cfg_list("content_scheduler_carousel_subjects", CAROUSEL_SUBJECTS)
+            if subject in ca.SUBJECTS
+        ]
+        if not subjects:
+            subjects = [subject for subject in CAROUSEL_SUBJECTS if subject in ca.SUBJECTS]
+        random.shuffle(subjects)
+        tried = []
+        for subject in subjects[:attempts]:
+            tried.append(subject)
+            car = ca.build(subject=subject, slides=slides)
+            if car:
+                return ca.publish(car)
+            logger.warning(f"carousel subject {subject!r} had too few usable images")
+        return {
+            "success": False,
+            "error": f"carousel build failed after trying: {', '.join(tried)}",
+        }
+
+    if kind == "reel":
+        subject = random.choice(QUOTE_REEL_THEMES)
+        task_id = f"scheduled-quote-reel-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+        result = quote_reel.render_quote_reel(
+            task_id,
+            VideoParams(
+                video_subject=subject,
+                content_mode=quote_reel.CONTENT_MODE,
+                video_aspect="9:16",
+                n_threads=_cfg_int("quote_reel_n_threads", 2),
+            ),
+        )
+        publish_result = dict(result.get("publish_result") or {})
+        if publish_result.get("success"):
+            publish_result.setdefault("success", True)
+            publish_result["video"] = (result.get("videos") or [""])[0]
+            publish_result["artifact"] = result.get("quote_reel_artifact")
+            return publish_result
+        return {
+            "success": False,
+            "error": (
+                publish_result.get("error")
+                or result.get("error")
+                or "quote reel was generated but not published"
+            ),
+            "video": (result.get("videos") or [""])[0],
+            "artifact": result.get("quote_reel_artifact"),
+            "review_queue": result.get("quote_reel_review_queue"),
+            "review_required": result.get("review_required"),
+        }
 
     # One story a day is the twin of the feed card, so the two read as one post.
     # PLAN runs 'post' before 'story', so within a single run the card already
@@ -156,7 +305,12 @@ def produce(kind: str) -> dict:
     return vc.publish_card(card)
 
 
-def run_once(dry_run: bool = False, only: str | None = None) -> dict:
+def run_once(
+    dry_run: bool = False,
+    only: str | None = None,
+    *,
+    force: bool = False,
+) -> dict:
     svc = PostizService()
     if not svc.is_configured():
         return {"error": "Postiz is not configured"}
@@ -167,7 +321,7 @@ def run_once(dry_run: bool = False, only: str | None = None) -> dict:
     for kind in PLAN:
         if only and kind != only:
             continue
-        is_due, reason = due(kind, now, svc)
+        is_due, reason = (True, "forced") if force else due(kind, now, svc)
         if not is_due:
             logger.info(f"{kind}: skip — {reason}")
             results[kind] = {"action": "skip", "reason": reason}
@@ -185,23 +339,56 @@ def run_once(dry_run: bool = False, only: str | None = None) -> dict:
             "publish_at": outcome.get("publish_at"),
             "error": outcome.get("error"),
         }
+        for key in ("video", "artifact", "review_queue", "review_required"):
+            if outcome.get(key):
+                results[kind][key] = outcome.get(key)
         if not outcome.get("success"):
             logger.error(f"{kind}: {outcome.get('error')}")
 
     return results
 
 
+def run_loop(interval_seconds: int, dry_run: bool = False, only: str | None = None) -> None:
+    interval_seconds = max(60, int(interval_seconds or 900))
+    logger.info(f"content scheduler loop started, interval={interval_seconds}s")
+    while True:
+        try:
+            run_once(dry_run=dry_run, only=only)
+        except Exception:
+            logger.exception("content scheduler pass failed; continuing")
+        time.sleep(interval_seconds)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Publish whatever is due")
     parser.add_argument("--dry-run", action="store_true", help="decide but do not publish")
     parser.add_argument("--only", choices=sorted(PLAN), help="restrict to one format")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="produce the selected format now; Postiz still chooses the legal slot",
+    )
+    parser.add_argument("--loop", action="store_true", help="run continuously")
+    parser.add_argument("--interval", type=int, default=900, help="loop interval seconds")
     args = parser.parse_args()
 
-    results = run_once(dry_run=args.dry_run, only=args.only)
+    if args.force and not args.only:
+        parser.error("--force requires --only")
+    if args.force and args.loop:
+        parser.error("--force is for one-off runs, not --loop")
+
+    if args.loop:
+        run_loop(args.interval, dry_run=args.dry_run, only=args.only)
+        return 0
+
+    results = run_once(dry_run=args.dry_run, only=args.only, force=args.force)
     print(json.dumps(results, indent=2, default=str))
     # Non-zero only on a real publish failure, so the timer's OnFailure fires
     # for genuine problems and stays quiet on "nothing was due".
-    return 1 if any(r.get("action") == "failed" for r in results.values()) else 0
+    return 1 if any(
+        isinstance(r, dict) and r.get("action") == "failed"
+        for r in results.values()
+    ) else 0
 
 
 if __name__ == "__main__":

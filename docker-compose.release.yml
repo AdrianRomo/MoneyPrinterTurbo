@@ -19,3 +19,5 @@ services:
     command: [ "python3", "main.py" ]
     volumes: *common-volumes
     restart: always
+# See docker-compose.yml: the scheduler is a timer-driven `docker exec` into the
+# api container, not a service of its own.

@@ -19,7 +19,7 @@ from typing import List, Optional
 
 from loguru import logger
 
-from app.services import llm
+from app.services import llm, reel_script
 from app.models.article import (
     ArticleRecord,
     ArticleSource,
@@ -374,6 +374,32 @@ def _assessment_from_payload(data: dict) -> StoryAssessment:
 # ---------------------------------------------------------------------------
 
 
+def _limit_scenes(scenes: List[Scene], maximum: int) -> List[Scene]:
+    """Merge adjacent scenes until the reel has at most `maximum` shots.
+
+    Merging rather than dropping: the narration is the script and must survive
+    intact — what changes is how many pictures it is cut across. The shortest
+    adjacent pair goes first, so the longest beats keep their own shot.
+    """
+    scenes = list(scenes or [])
+    if maximum < 1 or len(scenes) <= maximum:
+        return scenes
+
+    while len(scenes) > maximum:
+        pairs = range(len(scenes) - 1)
+        index = min(pairs, key=lambda i: len(scenes[i].narration) + len(scenes[i + 1].narration))
+        first, second = scenes[index], scenes[index + 1]
+        first.narration = f"{first.narration.strip()} {second.narration.strip()}".strip()
+        try:
+            first.duration_weight = float(first.duration_weight or 0) + float(second.duration_weight or 0)
+        except (TypeError, ValueError):
+            pass
+        scenes.pop(index + 1)
+
+    logger.info(f"reel pacing: merged scenes down to {len(scenes)} shots")
+    return scenes
+
+
 def generate_article_script(
     articles: List[ArticleRecord],
     *,
@@ -393,6 +419,20 @@ def generate_article_script(
     if uncertainties:
         known_unknowns = "Known uncertainties to preserve:\n- " + "\n- ".join(uncertainties)
     revision = f"\n## Revision feedback to address\n{feedback}\n" if feedback else ""
+
+    # Article Mode has its own prompt and never passed through
+    # llm.build_script_prompt, so the reel discipline did not reach the scripts
+    # the autonomous worker actually publishes — it was still asking for 45
+    # seconds. The scripture anchor stays out: this prompt's contract is that
+    # every claim traces to a source.
+    reel_rules = ""
+    if reel_script.enabled():
+        duration_seconds = int(round(reel_script.target_seconds()))
+        shots = reel_script.scene_target()
+        reel_rules = reel_script.guidance_block(include_anchor=False) + f"""
+9. Return between 3 and {shots} scenes — no more. One idea needs a few held
+   shots, not a cut every two seconds.
+"""
 
     prompt = f"""# Role: Short-Form News Video Scriptwriter
 
@@ -449,9 +489,12 @@ Respond with ONE JSON object:
 }}
 
 {_sources_block(articles)}
+{reel_rules}
 """
     data = _call_json(prompt)
     script = _script_from_payload(data, language=language, media_mode=media_mode)
+    if reel_script.enabled():
+        script.scenes = _limit_scenes(script.scenes, reel_script.scene_target())
     script.primary_article_id = articles[0].id if articles else ""
     script.cluster_id = articles[0].cluster_id if articles else ""
     script.sources = [ArticleSource.from_article(a) for a in articles]
@@ -649,6 +692,7 @@ def generate_reviewed_script(
     script = generate_article_script(articles, assessment=generate_kwargs.pop("assessment", None), **generate_kwargs)
     review = review_script(script, articles)
     script.review = review
+    _note_length(script, review)
     best = script
 
     attempts = max(0, int(auto_rewrite_attempts))
@@ -659,7 +703,34 @@ def generate_reviewed_script(
         revised = generate_article_script(articles, feedback=feedback, **generate_kwargs)
         review = review_script(revised, articles)
         revised.review = review
+        _note_length(revised, review)
         # Keep whichever version the reviewer trusts more.
         if review.confidence >= (best.review.confidence if best.review else 0.0):
             best = revised
     return best
+
+
+def _note_length(script: GeneratedScript, review) -> None:
+    """Add an over-length complaint to the review so the rewrite loop fixes it.
+
+    Article Mode already regenerates while the reviewer has issues, so length is
+    routed through the same mechanism rather than a second one. Stating the
+    actual overshoot is what makes a model act on it.
+    """
+    if not reel_script.enabled():
+        return
+    narration = script.narration_text()
+    budget = reel_script.char_budget()
+    logger.info(reel_script.report(narration))
+    if len(narration) <= budget:
+        return
+    issue = (
+        f"the narration is {len(narration)} characters, {len(narration) - budget} "
+        f"over the {budget}-character limit for a "
+        f"{int(round(reel_script.target_seconds()))}-second reel; cut it to one idea"
+    )
+    try:
+        review.issues = list(review.issues or []) + [issue]
+        review.approved = False
+    except (AttributeError, TypeError):  # a review shape we do not control
+        logger.warning("could not attach the length issue to the script review")
