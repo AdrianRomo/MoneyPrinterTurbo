@@ -54,7 +54,17 @@ SDXL_BUCKET = {
     "story": (768, 1344),
 }
 
-PUBLIC_DOMAIN_TRANSLATIONS = {"kjv", "web"}
+# Public domain only. NIV/ESV/NLT are copyrighted with strict quoting limits and
+# are not safe on an account being grown commercially. Every id here was checked
+# against bible-api.com/data, which reports its own licence per translation.
+#
+# `webbe` is the default rather than `kjv`: it is the modern-English option that
+# does NOT have web's "Yahweh is my shepherd" problem (it renders Psalm 23:1 as
+# "The LORD is my shepherd"), which was the whole reason KJV was chosen. KJV's
+# "that ye may abound" / "which strengtheneth me" is a real shareability tax —
+# people do not forward a verse they have to parse.
+PUBLIC_DOMAIN_TRANSLATIONS = {"kjv", "web", "webbe", "asv", "bbe", "oeb-us"}
+DEFAULT_TRANSLATION = "webbe"
 
 # Backgrounds are deliberately unpeopled. AI depictions of Jesus or biblical
 # figures land in the uncanny valley and reliably draw criticism on faith
@@ -142,14 +152,29 @@ def _comfy_url() -> str:
     return str(_cfg("comfyui_base_url", "http://192.168.0.135:8188")).rstrip("/")
 
 
+def _preferred_chars() -> int:
+    """Preferred verse length at SELECTION time (see select_verse).
+
+    Distinct from MAX_CHARS, which is the split budget. Reference accounts in
+    this niche hold to roughly 6-14 words; 110 characters is about that, and
+    leaves the type large enough to read in the feed grid.
+    """
+    try:
+        value = int(_cfg("verse_max_chars", 110))
+    except (TypeError, ValueError):
+        return 110
+    return value if value > 0 else 110
+
+
 def _translation() -> str:
-    t = str(_cfg("verse_translation", "kjv")).strip().lower()
+    t = str(_cfg("verse_translation", DEFAULT_TRANSLATION)).strip().lower()
     if t not in PUBLIC_DOMAIN_TRANSLATIONS:
         logger.warning(
-            f"verse_translation '{t}' is not public domain; falling back to kjv. "
-            "Copyrighted translations (NIV/ESV/NLT) are not safe to publish."
+            f"verse_translation '{t}' is not public domain; falling back to "
+            f"{DEFAULT_TRANSLATION}. Copyrighted translations (NIV/ESV/NLT) are "
+            "not safe to publish."
         )
-        return "kjv"
+        return DEFAULT_TRANSLATION
     return t
 
 
@@ -181,7 +206,8 @@ def _todays_post_path() -> str:
     return os.path.join(os.path.dirname(_state_path()), "todays_post.json")
 
 
-def _remember_todays_post(verse: Verse, bg: Image.Image, set_id: Optional[str]) -> None:
+def _remember_todays_post(verse: Verse, bg: Image.Image, set_id: Optional[str],
+                          series_label: Optional[str] = None) -> None:
     """Keep the day's feed card so its story twin can reuse verse and background.
 
     Instagram's Content Publishing API cannot re-share a feed post to a story —
@@ -202,6 +228,7 @@ def _remember_todays_post(verse: Verse, bg: Image.Image, set_id: Optional[str]) 
                 "text": verse.text,
                 "translation": verse.translation,
                 "set_id": set_id,
+                "series_label": series_label,
                 "bg_path": bg_path,
             }, fh)
     except (OSError, ValueError) as exc:
@@ -305,6 +332,33 @@ def pick_reference(theme: str = "", avoid: Optional[list[str]] = None) -> Option
 # --- 2. authoritative text ---------------------------------------------------
 
 
+_QUOTE_CHARS = "“”\"'‘’"
+
+
+def _strip_dangling_quotes(text: str) -> str:
+    """Drop a leading or trailing quote mark that has no partner.
+
+    Translations that mark direct speech hand back fragments like
+    ``“Come to me, all you who labour`` (open, never closed) or
+    ``...wherever you go.”`` (closed, never opened), because the quotation spans
+    verses the reference does not. The card and the caption both wrap the text in
+    their own quotes, so an unbalanced one renders as ``““Come to me...`` — the
+    kind of small wrongness that reads as carelessness on a scripture account.
+
+    Only strips when the count is genuinely unbalanced, so a verse that opens and
+    closes its own quotation keeps both marks.
+    """
+    if not text:
+        return text
+    opens = text.count("“")
+    closes = text.count("”")
+    if opens > closes and text[0] in _QUOTE_CHARS:
+        text = text[1:].lstrip()
+    elif closes > opens and text[-1] in _QUOTE_CHARS:
+        text = text[:-1].rstrip()
+    return text
+
+
 def fetch_verse(reference: str, translation: Optional[str] = None) -> Optional[Verse]:
     """Fetch verse text by reference. Returns None if the reference is not real."""
     translation = (translation or _translation()).lower()
@@ -325,12 +379,12 @@ def fetch_verse(reference: str, translation: Optional[str] = None) -> Optional[V
     except ValueError:
         return None
 
-    text = " ".join((data.get("text") or "").split())
+    text = _strip_dangling_quotes(" ".join((data.get("text") or "").split()))
     if not text:
         return None
     verses = []
     for item in (data.get("verses") or []):
-        vtext = " ".join(str(item.get("text") or "").split())
+        vtext = _strip_dangling_quotes(" ".join(str(item.get("text") or "").split()))
         if not vtext:
             continue
         verses.append({
@@ -410,17 +464,42 @@ def split_verse(verse: Verse, kind: str = "post") -> list:
     return parts
 
 
-def select_verse(theme: str = "", attempts: int = 4) -> Optional[Verse]:
-    """LLM proposes, the API decides. Unfetchable references are discarded."""
+def select_verse(theme: str = "", attempts: int = 6) -> Optional[Verse]:
+    """LLM proposes, the API decides. Unfetchable references are discarded.
+
+    Verses longer than the preferred budget are re-rolled rather than rejected.
+    MAX_CHARS is the point at which a passage is SPLIT across cards; this is a
+    much lower bar, about what a card can set at a size that survives the feed
+    grid. Romans 15:13 is 130 characters, fits on one card, and sets as seven
+    lines of type — legible full-screen and grey mush at thumbnail size, which
+    is where the decision to stop scrolling is actually made.
+
+    It is a preference, not a gate: the first verified verse is kept as a
+    fallback and returned if nothing shorter turns up, so a long verse costs
+    variety rather than the whole slot.
+    """
+    budget = _preferred_chars()
     avoid = _recent_references()
+    fallback: Optional[Verse] = None
     for _ in range(attempts):
         ref = pick_reference(theme, avoid=avoid)
         if not ref:
             continue
         verse = fetch_verse(ref)
-        if verse:
+        if not verse:
+            avoid = avoid + [ref]
+            continue
+        if len(verse.text) <= budget:
             return verse
+        if fallback is None:
+            fallback = verse
+        logger.info(f"{verse.reference} is {len(verse.text)} chars (over the "
+                    f"{budget}-char card budget); asking for a shorter one")
         avoid = avoid + [ref]
+    if fallback is not None:
+        logger.warning(f"no verse under {budget} chars after {attempts} attempts; "
+                       f"using {fallback.reference} ({len(fallback.text)} chars)")
+        return fallback
     logger.error("could not obtain a verified verse after %d attempts" % attempts)
     return None
 
@@ -854,7 +933,7 @@ def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = No
         # the series name leads rather than trailing after the verse.
         caption = f"{series_label}\n\n{caption}"
     if kind == "post" and bg is not None:
-        _remember_todays_post(verse, bg, set_id)
+        _remember_todays_post(verse, bg, set_id, series_label)
     return {"path": paths[0], "paths": paths, "parts": parts,
             "verse": verse, "caption": caption, "kind": kind,
             "set_id": set_id, "series_label": series_label}
@@ -879,7 +958,14 @@ def create_story_from_todays_post() -> Optional[dict]:
                   translation=record["translation"])
     # The background cleared the gate at 4:5; the 9:16 crop samples different
     # pixels, so it is measured again rather than assumed.
-    path = compose_card(bg, verse, kind="story", point_at_post=True)
+    #
+    # The twin carries the SAME series label as the card it is built from. It is
+    # the one story that is genuinely part of the series, and without the label
+    # the pair reads as two unrelated cards — which is the exact thing rebuilding
+    # it from the same verse and background exists to prevent.
+    series_label = record.get("series_label") or None
+    path = compose_card(bg, verse, kind="story", point_at_post=True,
+                        series_label=series_label)
     if not path:
         logger.warning("story twin rejected on contrast; falling back to a fresh story")
         return None

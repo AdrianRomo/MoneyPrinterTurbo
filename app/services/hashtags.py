@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 from typing import Optional
 
 from loguru import logger
@@ -230,28 +231,178 @@ def retention_report() -> dict:
 
 # Instagram indexes caption text for search; the first line is what surfaces.
 # Leading with a keyword-bearing sentence is worth more than the hashtag block.
-KEYWORD_LEADS = {
-    "devotional": "Daily Bible verse and devotional encouragement",
-    "encouragement": "Bible verse for encouragement when life feels heavy",
-    "gratitude": "A Bible verse about gratitude and thankfulness",
-    "morning": "Morning Bible verse for your quiet time",
-    "scripture_art": "Bible verse of the day",
-    "peace": "A Bible verse about peace and rest",
-    "everyday_faith": "Finding faith in ordinary, everyday moments",
-    "hope": "A Bible verse about hope for today",
+#
+# Each set carries SEVERAL leads rather than one. A fixed lead per set meant the
+# same eight sentences cycled forever: the one field Instagram actually searches
+# was carrying no new keywords, and two posts from the same set read as a
+# template. They stay keyword-bearing — that reasoning was right — they just
+# stop being identical.
+KEYWORD_LEADS: dict[str, list[str]] = {
+    "devotional": [
+        "Daily Bible verse and devotional encouragement",
+        "A short devotional for today",
+        "Today's scripture reading, in one verse",
+    ],
+    "encouragement": [
+        "Bible verse for encouragement when life feels heavy",
+        "A verse for the days that ask too much of you",
+        "Encouragement from scripture for a hard week",
+    ],
+    "gratitude": [
+        "A Bible verse about gratitude and thankfulness",
+        "Scripture for a thankful heart",
+        "A verse worth reading slowly before you say thank you",
+    ],
+    "morning": [
+        "Morning Bible verse for your quiet time",
+        "A verse to start the morning on",
+        "Scripture for the first quiet minutes of the day",
+    ],
+    "scripture_art": [
+        "Bible verse of the day",
+        "Scripture, set plainly",
+        "A verse worth keeping where you can see it",
+    ],
+    "peace": [
+        "A Bible verse about peace and rest",
+        "Scripture for an anxious mind",
+        "A verse for when you cannot settle",
+    ],
+    "everyday_faith": [
+        "Finding faith in ordinary, everyday moments",
+        "A verse for an ordinary Tuesday",
+        "Scripture for the unremarkable parts of the week",
+    ],
+    "hope": [
+        "A Bible verse about hope for today",
+        "Scripture for holding on a little longer",
+        "A verse about hope when it is in short supply",
+    ],
 }
+
+# Comments are the strongest ranking signal Instagram has, and effort is what
+# kills reply rates — every one of these is answerable in a word or two without
+# the reader having to compose anything. Same principle as carousel.QUESTIONS.
+QUESTIONS = [
+    "Which line did you need today?",
+    "Who came to mind while you read this?",
+    "One word for where you are this week?",
+    "Have you sat with this verse before?",
+    "What would change if you believed this today?",
+]
+
+# Saves are weighted x12 and shares x20 in SCORE_WEIGHTS, and until now nothing
+# in the content ever asked for either. An explicit ask is the cheapest lever on
+# the two metrics the scoring already says matter most.
+SAVE_ASKS = [
+    "Save this for the day it stops being theoretical.",
+    "Save it — you will want it on a worse morning than this one.",
+    "Save this one, and pass it on if it is not just for you.",
+    "Keep this where you will see it again.",
+    "Save it for later — this one keeps.",
+]
+
+# A reflection is commentary, never scripture. These carry the format when the
+# model is unavailable or its output fails the guards below — the caption must
+# never fall back to being a bare re-print of the image.
+REFLECTION_FALLBACKS = [
+    "Read it once for the sense of it, then once more slowly.",
+    "Nothing here asks you to feel better first. It just says what is true.",
+    "This was written to people who were not coping either.",
+    "It is worth noticing what this verse does not ask of you.",
+    "Short enough to carry around all day, which is probably the point.",
+]
+
+# The model may comment on scripture; it may never write, quote, paraphrase or
+# cite it. A reflection that quotes is indistinguishable from a misquote to a
+# reader, and a misquote is the error that costs credibility on a faith account.
+_REF_PATTERN = re.compile(r"\b\d?\s*[A-Z][a-z]+\.?\s+\d+[:.]\d+")
+_MAX_REFLECTION_CHARS = 190
+
+
+def reflection(verse_text: str, reference: str) -> str:
+    """One line of commentary on the verse, or "" if it cannot be trusted.
+
+    Guarded the same way carousel.science_note is: the prompt constrains it, and
+    anything that comes back looking like scripture is dropped rather than
+    repaired. Returning "" is safe — the caller substitutes a fallback line.
+    """
+    from app.services import llm
+
+    prompt = (
+        "Write ONE short sentence of plain reflection on the verse below, for "
+        "an Instagram caption. Maximum 22 words — shorter is better. Speak to "
+        "the reader as a person having an ordinary week. Do NOT quote the "
+        "verse, do not paraphrase it, do not cite any chapter or verse number, "
+        "and do not use quotation marks, hashtags or emoji. No preamble.\n"
+        f"Verse ({reference}): {verse_text}"
+    )
+    try:
+        raw = (llm._generate_response(prompt) or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"reflection generation failed: {exc}")
+        return ""
+    line = " ".join(raw.splitlines()[0].split()) if raw else ""
+    line = line.strip().strip("*").strip()
+    if not line:
+        return ""
+    if len(line) > _MAX_REFLECTION_CHARS:
+        logger.warning("reflection too long; dropping it")
+        return ""
+    if any(ch in line for ch in '"“”'):
+        logger.warning("reflection quoted something; dropping it rather than risk a misquote")
+        return ""
+    if _REF_PATTERN.search(line):
+        logger.warning("reflection cited a reference; dropping it rather than risk a wrong one")
+        return ""
+    if "#" in line:
+        logger.warning("reflection contained a hashtag; dropping it")
+        return ""
+    return line
+
+
+def rotate(bucket: str, options: list[str], keep: int = 8) -> str:
+    """Pick from `options`, avoiding whatever was used most recently.
+
+    Same least-recently-used shape as choose_set's explore branch. Without it,
+    random.choice over five lines repeats within a couple of posts, which is
+    exactly the templated feel these banks exist to remove.
+    """
+    if not options:
+        return ""
+    recent = _load("recent_copy.json", {})
+    used = [s for s in recent.get(bucket, []) if s in options]
+    fresh = [s for s in options if s not in used]
+    choice = random.choice(fresh) if fresh else random.choice(options)
+    recent[bucket] = ([s for s in used if s != choice] + [choice])[-keep:]
+    _save("recent_copy.json", recent)
+    return choice
 
 
 def build_caption(verse_text: str, reference: str, translation: str,
-                  set_id: Optional[str] = None) -> tuple[str, str]:
-    """Return (caption, set_id). Keyword line first, verse, then a small tag set."""
+                  set_id: Optional[str] = None, reflect: bool = True) -> tuple[str, str]:
+    """Return (caption, set_id).
+
+    Shape: keyword lead, the verse, one line of reflection, a question, a save
+    ask, then a small tag set. The previous version led with a keyword line and
+    then reprinted the verse that is already rendered on the image — nothing in
+    it gave a reader a reason to stop, comment, or save, which are the three
+    things the ranking (and SCORE_WEIGHTS) actually reward.
+
+    `reflect=False` skips the model call for callers that cannot afford it.
+    """
     set_id = choose_set(set_id)
-    lead = KEYWORD_LEADS.get(set_id, "Bible verse of the day")
-    tags = " ".join(tags_for(set_id))
-    caption = (
-        f"{lead} — {reference}\n\n"
-        f"“{verse_text}”\n"
-        f"— {reference} ({translation})\n\n"
-        f"{tags}"
-    )
-    return caption, set_id
+    leads = KEYWORD_LEADS.get(set_id) or ["Bible verse of the day"]
+    lead = rotate(f"lead:{set_id}", leads)
+    note = reflection(verse_text, reference) if reflect else ""
+    if not note:
+        note = rotate("reflection", REFLECTION_FALLBACKS)
+    blocks = [
+        f"{lead} — {reference}",
+        f"“{verse_text}”\n— {reference} ({translation.upper()})",
+        note,
+        rotate("question", QUESTIONS),
+        rotate("save_ask", SAVE_ASKS),
+        " ".join(tags_for(set_id)),
+    ]
+    return "\n\n".join(b for b in blocks if b), set_id

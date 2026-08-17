@@ -285,7 +285,16 @@ QUESTIONS = [
     "Tag someone who needs to see slide 3.",
 ]
 
-CTA_LINES = ("more of creation,", "twice a week")
+# The closing slide asks for the SAVE, not the follow. Saves are weighted x12
+# and shares x20 in hashtags.SCORE_WEIGHTS, a follow is not weighted at all, and
+# "follow for more" is the ask every account on the platform is already making.
+#
+# It also no longer states a cadence. The old copy promised "twice a week" while
+# the account published a carousel daily — a brand promise contradicted by the
+# posting schedule is worse than no promise, and it silently goes stale every
+# time PLAN changes.
+CTA_LINES = ("keep this one", "for a slower morning")
+CTA_MICRO = "SAVE  ·  SHARE  ·  FOLLOW"
 
 
 def _cfg(key: str, default: str) -> str:
@@ -461,10 +470,16 @@ def _cta_slide(photo_img: Image.Image) -> Image.Image:
     account will ever have, and until now they were shown a photo and nothing
     to do."""
     img = _cover(photo_img, WIDTH, HEIGHT)
-    img = ImageEnhance.Color(img).enhance(0.55)
-    img = img.filter(ImageFilter.GaussianBlur(radius=WIDTH * 0.012))
+    # Softened, not obliterated. The old treatment stacked a 17px blur, a 0.55
+    # desaturation AND a 150-alpha black wash on the same frame, which turned a
+    # photograph into grey mush and made the last thing a swiper saw the worst
+    # image in the set. The type here is large and bold; it needs far less help
+    # than the verse cards do, and the slide should still read as the cover it
+    # bookends.
+    img = ImageEnhance.Color(img).enhance(0.72)
+    img = img.filter(ImageFilter.GaussianBlur(radius=WIDTH * 0.005))
     img = Image.alpha_composite(img.convert("RGBA"),
-                                Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 150))).convert("RGB")
+                                Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 105))).convert("RGB")
     draw = ImageDraw.Draw(img)
 
     f_lead = ty.font(ty.SERIF, int(WIDTH * 0.058), "Light")
@@ -478,7 +493,7 @@ def _cta_slide(photo_img: Image.Image) -> Image.Image:
                      (255, 255, 255), ty.TRACK_TITLE)
 
     f_small = ty.font(ty.SANS, int(WIDTH * 0.017), "Light")
-    ty.draw_centered(draw, WIDTH, y + int(HEIGHT * 0.11), "FOLLOW FOR MORE", f_small,
+    ty.draw_centered(draw, WIDTH, y + int(HEIGHT * 0.11), CTA_MICRO, f_small,
                      (255, 255, 255, 205), ty.TRACK_MICRO)
     return img
 
@@ -611,13 +626,50 @@ def science_note(subject: str) -> str:
     return text[:600]
 
 
+# The first line is the one Instagram indexes for search, and it was the SAME
+# sentence on every carousel ever published — the one text field that could
+# carry new keywords was carrying none. The body below it was identical too, so
+# two carousels in a row read as a form letter.
+#
+# {noun} is the plain subject ("mountains"), never the cover headline: the
+# headline is a rotating hook and would render as "The creativity of God in did
+# god overdo it with mountains?".
+CAPTION_LEADS = [
+    "The creativity of God in {noun}",
+    "{noun}, and what they say about the One who made them",
+    "A closer look at {noun}",
+    "Photographs of {noun}, and a reason to slow down",
+    "What {noun} are still doing without an audience",
+]
+
+CAPTION_BODIES = [
+    "Creation keeps saying something we did not invent. "
+    "Swipe through and let it slow you down for a minute.",
+    "None of this was made to be photographed. It was here first, "
+    "and it will be here after the scroll.",
+    "Swipe slowly. There is no hurry in any of these.",
+    "Every one of these is a real place, photographed by someone who went there.",
+    "Worth looking at for longer than an algorithm expects you to.",
+]
+
+# Saves are weighted x12 and shares x20; nothing in the caption ever asked.
+SAVE_ASKS = [
+    "Save this set for a day that needs slowing down.",
+    "Save it — and send it to whoever would stand there with you.",
+    "Keep this one. Share it if it is not just for you.",
+]
+
+
 def build_caption(car: dict) -> tuple[str, str]:
     from app.services import hashtags
 
     set_id = hashtags.choose_set()
-    lead = f"The creativity of God in {car['title'].lower()}"
-    body = ("Creation keeps saying something we did not invent. "
-            "Swipe through and let it slow you down for a minute.")
+    noun = car["title"].lower()
+    lead = hashtags.rotate("carousel_lead", CAPTION_LEADS).format(noun=noun)
+    # Templates that OPEN with {noun} would otherwise start the caption — and so
+    # the whole post — on a lowercase letter.
+    lead = lead[:1].upper() + lead[1:]
+    body = hashtags.rotate("carousel_body", CAPTION_BODIES)
     note = science_note(car["subject"].replace("_", " "))
     tags = " ".join(hashtags.tags_for(set_id))
 
@@ -627,7 +679,8 @@ def build_caption(car: dict) -> tuple[str, str]:
     parts = [lead, body]
     if note:
         parts.append(note)
-    parts.append(random.choice(QUESTIONS))
+    parts.append(hashtags.rotate("carousel_question", QUESTIONS))
+    parts.append(hashtags.rotate("carousel_save", SAVE_ASKS))
     parts.append(tags)
     return "\n\n".join(parts), set_id
 
