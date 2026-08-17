@@ -345,7 +345,79 @@ def download(photo: Photo,
         return None
 
 
+# Commons' Artist field is free text, and a good number of photographers put a
+# whole licence statement in it. One slide published 2026-08-17 carried
+# "This Photo was taken by Wolfgang Moroder. Feel free to use my photos, but
+# please mention me as the author and send me a message" as its on-slide credit,
+# right across the middle of the photograph.
+_TAKEN_BY = re.compile(r"\b(?:photo(?:graph)?\s+(?:was\s+)?taken by|photo by|"
+                       r"picture by|image by|copyright)\s+", re.I)
+_CREDIT_NOISE = re.compile(r"\b(feel free|please |you (?:may|can) |if you |"
+                           r"licen[cs]e|attribution|mention me|send me|contact me|"
+                           r"all rights|do not |no derivative)", re.I)
+# Labels uploaders type in front of the credit. Stripped, not treated as a name.
+_CREDIT_LABEL = re.compile(r"^(credit|image|photo|science|source|author|by)\s*:\s*", re.I)
+# A parenthetical whose contents are licence chatter rather than part of a name.
+_NOISY_PAREN = re.compile(r"\s*\((?=[^)]*(?:feel free|if you|you can|you may|ask me|"
+                          r"contact|licen[cs]e|please))[^)]*\)", re.I)
+MAX_AUTHOR_CHARS = 48
+
+
+def clean_author(raw: str) -> str:
+    """Reduce a free-text Artist field to something that reads as a name.
+
+    Attribution still has to be accurate, so this only ever REMOVES boilerplate
+    around the name — it never invents or reformats one. When nothing name-like
+    survives, the caller falls back to "unknown", which is honest; a mangled
+    half-sentence is not.
+    """
+    text = " ".join((raw or "").split())
+    if not text:
+        return ""
+    # Labels the uploader typed in front of the name: "Credit: NASA...",
+    # "IMAGE: NASA, ESA...", "SCIENCE: ...". Not part of anyone's name.
+    text = _CREDIT_LABEL.sub("", text, count=1).strip()
+    # A parenthetical aside carrying licence chatter — "Jérémie Silvestro (If
+    # you can improve this photo development, ask me the RAW.)" — must not cost
+    # the name in front of it. Drop the aside, keep the credit.
+    text = _NOISY_PAREN.sub("", text).strip()
+    # "This Photo was taken by Wolfgang Moroder. Feel free..." -> everything
+    # after the lead-in, then cut at the sentence end.
+    match = _TAKEN_BY.search(text)
+    if match:
+        text = text[match.end():]
+    # Cut at the first sentence boundary: the name comes first, the licence
+    # sermon after.
+    text = re.split(r"(?<=[a-z])\.\s+|\s+[|—–-]\s+", text, maxsplit=1)[0].strip()
+    text = text.rstrip(".,;:").strip()
+    # A clause that is still clearly boilerplate is not a name.
+    if _CREDIT_NOISE.search(text):
+        return ""
+    # "Original: Anubhav Agarwal Derivative work: UnpetitproleX" — Commons'
+    # standard derivative credit. Both people are credited under CC BY-SA, so
+    # both are kept; the labels are what make it too long to set, not the names.
+    derived = re.match(r"^Original:\s*(.+?)\s*Derivative work\b[^:]*:?\s*(.+)$",
+                       text, re.I)
+    if derived:
+        text = f"{derived.group(1).strip()}, {derived.group(2).strip()}"
+    if len(text) <= MAX_AUTHOR_CHARS:
+        return text
+    # Too long to set on a slide. Shorten to the first name plus "et al." —
+    # accepted practice for a long author list, and the only safe option, since
+    # returning "unknown" for a credited CC BY work would be a licence breach.
+    head = re.split(r",| and ", text, maxsplit=1)[0].strip()
+    if head and head != text and len(head) <= MAX_AUTHOR_CHARS:
+        return f"{head} et al."
+    # A single name longer than the budget: truncate on a word boundary rather
+    # than drop it. LENGTH ALONE MUST NEVER COST AN ATTRIBUTION — only text that
+    # is recognisably boilerplate (handled above) is allowed to become "unknown".
+    words = text.split()
+    while len(words) > 1 and len(" ".join(words) + " …") > MAX_AUTHOR_CHARS:
+        words.pop()
+    return " ".join(words) + " …" if words else ""
+
+
 def credit_line(photo: Photo) -> str:
     """Short attribution, as CC BY requires."""
-    author = photo.author if photo.author and photo.author != "Unknown" else "unknown"
-    return f"{author} / {photo.licence}"
+    author = clean_author(photo.author) if photo.author != "Unknown" else ""
+    return f"{author or 'unknown'} / {photo.licence}"

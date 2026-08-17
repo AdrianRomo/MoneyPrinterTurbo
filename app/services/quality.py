@@ -31,6 +31,72 @@ MIN_CAROUSEL_SLIDES = 4
 # there were enough pixels behind them.
 MAX_SLIDE_UPSCALE = 1.02
 
+# --- aesthetics --------------------------------------------------------------
+#
+# Every other size rule here measures PIXELS. None of them measures LIGHT, and a
+# technically perfect photograph of a flat overcast sky still gets scrolled past.
+# The worst cover the account has published (mountains, 2026-08-17) cleared every
+# existing gate: correctly licensed, correctly labelled, distinct, downscaled.
+#
+# Calibrated against the 57 slides published 2026-08-15..17, not guessed:
+#
+#   colourfulness   min 4.3   p25 21.9   median 34.6   p75 45.3   max 108.2
+#   contrast        min 15.7  p25 37.8   median 42.3   p75 48.4   max  62.0
+#   brightness      min 32.1  p25 73.9   median 103.5  p75 122.9  max 173.2
+#
+# Two findings from that data decided the shape of this gate:
+#
+# 1. Colourfulness is the discriminating axis. The bad mountains cover scores
+#    4.3 — three times below the next lowest slide in the whole set. Contrast
+#    (35.9) and brightness (109) both put it mid-pack, so neither would catch it.
+#
+# 2. A colourfulness floor ALONE would reject good work. The deep-space cover
+#    scores 12.7 and the best aurora scores 26.0 at a contrast of 15.7 — both are
+#    genuinely near-monochrome, both are excellent, and both are exactly the
+#    muted register this brand is built on. "Muted" and "lifeless" are not the
+#    same thing and a single threshold cannot tell them apart.
+#
+# What separates them is brightness. Colourless AND dark is a night sky, which
+# reads as deliberate. Colourless AND bright is an overcast whiteout, which reads
+# as a snapshot. So the gate fires only on the conjunction.
+#
+# There is deliberately NO contrast floor. The measured evidence says it would
+# reject the aurora and catch nothing that colourfulness does not already catch —
+# the same trap as delta-vs-drift in the motion gate, where the metric that looked
+# obvious was measuring texture rather than the thing being asked about.
+FLAT_COLOUR = 15.0        # below this the frame is essentially monochrome
+WASHED_BRIGHTNESS = 95.0  # ...and above this it is washed out rather than moody
+
+
+def aesthetics(img: Image.Image) -> dict:
+    """Colourfulness, tonal range and mean brightness of a slide.
+
+    Colourfulness is Hasler & Susstrunk (2003), the standard cheap metric.
+    Measured on a thumbnail: these are whole-frame statistics, and sampling the
+    full 1440x1800 buys nothing but time.
+    """
+    import numpy as np
+
+    small = img.convert("RGB").copy()
+    small.thumbnail((400, 400))
+    arr = np.asarray(small).astype(np.float64)
+    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+    rg = r - g
+    yb = 0.5 * (r + g) - b
+    colour = float(np.sqrt(rg.std() ** 2 + yb.std() ** 2)
+                   + 0.3 * np.sqrt(rg.mean() ** 2 + yb.mean() ** 2))
+    lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    return {"colour": colour, "contrast": float(lum.std()), "brightness": float(lum.mean())}
+
+
+def check_slide_aesthetics(img: Image.Image) -> tuple[bool, str]:
+    """Is this photograph worth a slide? Judged on light, not on pixels."""
+    m = aesthetics(img)
+    if m["colour"] < FLAT_COLOUR and m["brightness"] > WASHED_BRIGHTNESS:
+        return False, (f"washed out: colourfulness {m['colour']:.1f} "
+                       f"(floor {FLAT_COLOUR}) at brightness {m['brightness']:.0f}")
+    return True, f"colour {m['colour']:.1f}, brightness {m['brightness']:.0f}"
+
 
 def luminance_under(img: Image.Image, mask: Image.Image) -> Optional[float]:
     """Mean relative luminance of `img` where `mask` is non-zero (0.0–1.0)."""
@@ -90,7 +156,21 @@ def check_carousel(car: dict) -> tuple[bool, str]:
     if worst > MAX_SLIDE_UPSCALE:
         return False, f"slide source upscaled {worst:.2f}x (max {MAX_SLIDE_UPSCALE}x)"
     sharpness = f", worst source scale {worst:.2f}x" if scales else ""
-    return True, f"{len(paths)} slides, all distinct{sharpness}"
+    # Per-slide aesthetics are enforced at candidate time in carousel.build(),
+    # where a rejected photograph can still be replaced. Re-measuring the whole
+    # set here would only be able to fail it, so this reports rather than gates.
+    looks = ""
+    try:
+        # The closing CTA slide is deliberately desaturated and darkened, so it
+        # is always the flattest frame in the set and reporting it as such says
+        # nothing about the photography.
+        colours = [aesthetics(Image.open(p))["colour"]
+                   for p in paths if "-zz-cta" not in p]
+        if colours:
+            looks = f", flattest photo {min(colours):.1f}"
+    except (OSError, ValueError) as exc:
+        logger.debug(f"could not measure carousel aesthetics: {exc}")
+    return True, f"{len(paths)} slides, all distinct{sharpness}{looks}"
 
 
 def log_result(label: str, ok: bool, reason: str) -> None:

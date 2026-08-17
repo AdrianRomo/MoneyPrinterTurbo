@@ -270,8 +270,13 @@ COVER_VARIANTS = [
     "{count} PLACES THAT LOOK PAINTED",
     "DID GOD OVERDO IT WITH {noun}?",
     "{noun}, AND NOTHING WE MADE",
-    "LOOK AT {noun}",
+    "{count} THINGS NOBODY DESIGNED",
+    "YOU HAVE NEVER SEEN {noun} LIKE THIS",
 ]
+# Dropped: "LOOK AT {noun}". It is an instruction, not a hook — it opens no
+# curiosity gap, and it is the one that fired on the flattest cover the account
+# has published. Every variant here either poses a question, promises a count,
+# or makes a claim worth checking.
 # Wildlife and space are not "places"; keep those variants off them.
 PLACE_ONLY_VARIANTS = {1}
 
@@ -359,10 +364,39 @@ def _draw_furniture(img: Image.Image, location: Optional[str], credit: Optional[
     if credit:
         # CC BY requires attribution; keep it discreet but present on-slide.
         f_credit = ty.font(ty.SANS, int(w * 0.0105), "Regular")
+        credit = _fit_credit(draw, credit, f_credit, w - 2 * margin)
         cw = ty.width(draw, credit, f_credit, ty.TRACK_MICRO)
         ty.draw_tracked(draw, (w - margin - cw, int(h * 0.868)), credit, f_credit,
                         (255, 255, 255, 145), ty.TRACK_MICRO)
     return img
+
+
+def _fit_credit(draw, credit: str, font, max_px: int) -> str:
+    """Shorten an over-long credit so it cannot run off the slide.
+
+    The credit is right-aligned by measuring its own width, so nothing stopped a
+    long one starting at a negative x. Observatory images are the case that
+    breaks it: the Tarantula Nebula cover published 2026-08-15 credits eleven
+    named astronomers and their institutions, and the line ran off BOTH edges of
+    the frame.
+
+    Truncation is on the AUTHOR only and the licence is always kept, because the
+    licence is the part with legal weight — CC BY requires attribution, and "et
+    al." is accepted scholarly practice for a long author list where dropping the
+    licence would not be acceptable at all.
+    """
+    if ty.width(draw, credit, font, ty.TRACK_MICRO) <= max_px:
+        return credit
+    author, _, licence = credit.rpartition(" / ")
+    if not author:
+        return credit
+    words = author.split()
+    while words and ty.width(draw, f"{' '.join(words)} et al. / {licence}",
+                             font, ty.TRACK_MICRO) > max_px:
+        words.pop()
+    if not words:
+        return licence
+    return f"{' '.join(words)} et al. / {licence}"
 
 
 def _cover_slide(photo_img: Image.Image, title: str) -> Image.Image:
@@ -552,11 +586,25 @@ def build(subject: Optional[str] = None, slides: int = 8,
         if scale > MAX_UPSCALE:
             logger.warning(f"skipping {photo.title}: would upscale {scale:.2f}x")
             continue
+        # Enough pixels is not the same as worth looking at. Judged on the source
+        # before any furniture is drawn, and dropped for the next candidate the
+        # same way an upscale is — the 191-subject pool is deep enough to afford
+        # being picky, and a flat slide costs a swipe.
+        looks_ok, why = quality.check_slide_aesthetics(source)
+        if not looks_ok:
+            logger.warning(f"skipping {photo.title}: {why}")
+            continue
         index = len(paths)
         if index == 0:
+            from app.services import hashtags as _hashtags
+
             choices = [v for i, v in enumerate(COVER_VARIANTS)
                        if label_locations or i not in PLACE_ONLY_VARIANTS]
-            headline = random.choice(choices).format(noun=noun, count=slides - 1)
+            # Least-recently-used rather than random.choice: the cover is the one
+            # slide most people ever see, and a uniform draw over six templates
+            # repeats within a couple of posts.
+            headline = _hashtags.rotate("cover_variant", choices).format(
+                noun=noun, count=slides - 1)
             slide = _cover_slide(source, headline)
             cover_source = source        # the CTA bookends with it; don't refetch
         else:
