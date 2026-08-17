@@ -145,5 +145,55 @@ class TestPackOverrides(unittest.TestCase):
         self.assertNotIn("nonsense", content_scheduler.cadence())
 
 
+class TestSecondPack(unittest.TestCase):
+    """A pack that only ever has one instance is a config file with extra steps.
+
+    field-notes is a different vertical (natural history, no scripture), written
+    from scratch rather than copied, so anything the pipeline still assumes
+    about the original account shows up here.
+    """
+
+    def setUp(self):
+        self._name, self._cache = pack.pack_name, dict(pack._cache)
+        pack.pack_name = lambda: "field-notes"
+        pack._cache.clear()
+
+    def tearDown(self):
+        pack.pack_name = self._name
+        pack._cache.clear()
+        pack._cache.update(self._cache)
+
+    def test_it_loads(self):
+        self.assertTrue(pack.describe()["exists"], "packs/field-notes/pack.yaml missing")
+
+    def test_brand_comes_from_the_pack_not_config(self):
+        """The weld this pack was written to find.
+
+        config.toml carries brand_wordmark from before packs existed. With
+        config on top, EVERY pack rendered the first account's wordmark and a
+        second account could never have its own brand.
+        """
+        self.assertEqual(carousel.wordmark(), "field notes")
+        self.assertEqual(carousel.tagline(), ("observed", "× explained"))
+
+    def test_its_own_vocabulary_applies(self):
+        self.assertIn("lichen", carousel.subjects())
+        self.assertNotIn("galaxies", carousel.subjects())
+        self.assertEqual(sorted(hashtags._sets()),
+                         ["curiosity", "identification", "seasonal"])
+        self.assertEqual([s["id"] for s in series.all_series()],
+                         ["things-that-glow", "the-very-small"])
+
+    def test_a_format_can_be_switched_off_entirely(self):
+        """post: 0 is how a non-scripture account expresses "no verse cards"."""
+        self.assertEqual(content_scheduler.cadence()["post"]["per_day"], 0)
+        self.assertEqual(content_scheduler.cadence()["carousel"]["per_day"], 1)
+
+    def test_undeclared_keys_fall_back_to_module_defaults(self):
+        """Not to the other pack's values."""
+        self.assertEqual(verse_card.background_subjects(),
+                         verse_card.BACKGROUND_SUBJECTS)
+
+
 if __name__ == "__main__":
     unittest.main()

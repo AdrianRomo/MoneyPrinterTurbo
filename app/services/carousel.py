@@ -332,14 +332,22 @@ def _cfg(key: str, default: str) -> str:
 
 
 def wordmark() -> str:
-    """config.toml wins over the pack, which wins over the built-in default.
+    """The pack wins where it declares a brand; config.toml is the fallback.
 
-    config stays on top because it is the per-deployment override — a staging
-    account running the same pack must be able to differ without editing it.
+    This precedence is the opposite of the obvious one, and the second pack is
+    what forced it. config.toml already carried `brand_wordmark = "holy
+    ordinary"` from before packs existed, so with config on top EVERY pack
+    rendered the first account's wordmark — a second account could never get its
+    own brand, which defeats the point of a pack.
+
+    A pack IS the account's identity. A deployment that wants to differ should
+    use a different pack, not a config key. No-op for the current account: its
+    pack declares the same wordmark config already set.
     """
     from app.services import pack
 
-    return _cfg("brand_wordmark", pack.value("brand.wordmark", "holy ordinary"))
+    packed = pack.value("brand.wordmark")
+    return str(packed) if packed else _cfg("brand_wordmark", "holy ordinary")
 
 
 def tagline() -> tuple[str, str]:
@@ -347,10 +355,9 @@ def tagline() -> tuple[str, str]:
 
     packed = pack.value("brand.tagline")
     if isinstance(packed, (list, tuple)) and len(packed) == 2:
-        default = f"{packed[0]} {packed[1]}".replace("× ", "× ")
-    else:
-        default = "creation × wonder"
-    raw = _cfg("brand_tagline", default)
+        first, second = str(packed[0]).strip(), str(packed[1]).strip()
+        return (first, second if second.startswith("×") else f"× {second}")
+    raw = _cfg("brand_tagline", "creation × wonder")
     parts = [p.strip() for p in re.split(r"[×x]", raw, maxsplit=1)]
     return (parts[0], "× " + parts[1]) if len(parts) == 2 else (raw, "")
 
