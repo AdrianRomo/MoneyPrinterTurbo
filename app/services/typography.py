@@ -28,7 +28,15 @@ from typing import Optional
 
 from PIL import ImageFont
 
-FONT_DIR = "/influencer-automation-2.0/resource/fonts"
+# Derived from this file rather than hardcoded to the container's mount point, so
+# the type system is exercisable outside the container too. The fonts ship in the
+# repo, and the repo *is* what is mounted at /influencer-automation-2.0, so this
+# resolves to the same directory in the container.
+FONT_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "resource",
+    "fonts",
+)
 
 DISPLAY = os.path.join(FONT_DIR, "PlayfairDisplay[wght].ttf")
 SERIF = os.path.join(FONT_DIR, "CormorantGaramond[wght].ttf")
