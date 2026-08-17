@@ -174,7 +174,15 @@ def due(kind: str, now_utc: datetime, svc: PostizService) -> tuple[bool, str]:
     if publish_at is None:
         return False, f"no valid {kind} publish_at returned"
     quota_day = _local_date(publish_at)
-    horizon_days = max(0, _cfg_int("content_scheduler_schedule_days_ahead", 1))
+    # How deep the scheduler is willing to QUEUE, as opposed to how far Postiz
+    # will search for a free slot (postiz_post_lookahead_days, a month). Raised
+    # from 1 to a week so the queue can absorb a night the GPU was busy, and
+    # deliberately stopped there rather than following the lookahead out to a
+    # month: at the account's current reach the format is not proven, and a
+    # month of queued posts is a month of commitment to a format that may need
+    # to change next week. The month-deep resource is the footage pool, which
+    # costs nothing to discard.
+    horizon_days = max(0, _cfg_int("content_scheduler_schedule_days_ahead", 7))
     horizon = today + timedelta(days=horizon_days)
     if quota_day > horizon:
         return (

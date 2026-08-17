@@ -562,6 +562,85 @@ def _comfyui_assets(params: VideoParams, *, count: int = 3) -> list[QuoteReelAss
     return assets
 
 
+def _comfyui_motion_assets(params: VideoParams, *, count: int = 3) -> list[QuoteReelAsset]:
+    """Draw real motion clips from the pre-generated pool.
+
+    The still path above puts a slow push on a photograph, which reads as a
+    slideshow next to the reference Reels. These are ~5s clips generated ahead
+    of time by brand_motion's overnight timer, from the same allowlisted
+    subjects and the same SDXL seed frames — so the imagery is identical in
+    character to the stills, it simply moves.
+
+    Reads only. A clip costs minutes of GPU, so a miss here must never turn into
+    an inline generation that blocks the publish path; the caller falls back to
+    stills instead, which is a slightly worse Reel rather than a late one.
+
+    Dedupes on BOTH axes, because either alone leaves a visible repeat:
+
+    - by subject, because a Reel's search terms are near-synonyms that collapse
+      onto one subject ("quiet morning kitchen" and "hope at first light" both
+      resolve to the misty meadow), and
+    - by path, because two different subjects can still be served the same file
+      when the pool is only partly filled.
+
+    Without both, the Reel cuts from a shot straight back to that same shot.
+    """
+    # Imported here, as _comfyui_assets does: these pull in the diffusion
+    # stack, and the stock paths must not pay for it.
+    from app.services import brand_footage, brand_motion
+
+    assets: list[QuoteReelAsset] = []
+    seen_paths: set[str] = set()
+    seen_subjects: set[str] = set()
+
+    for index, term in enumerate(_quote_search_terms(params)):
+        if len(assets) >= count:
+            break
+        # `avoid` walks on to the next free subject in the mood rather than
+        # handing back one already used in this Reel.
+        subject = brand_footage.subject_for(term, index, avoid=seen_subjects)
+        if subject in seen_subjects:
+            continue
+        path = brand_motion.clip_for_subject(subject, avoid=seen_paths)
+        if not path:
+            # The mapped subject is not pooled yet — normal while the pool is
+            # filling. Take any other pooled clip rather than abandoning motion
+            # for the whole Reel; they all come from the same allowlist.
+            path = brand_motion.substitute_clip(avoid=seen_paths)
+        if not path or path in seen_paths:
+            continue
+        seen_paths.add(path)
+        seen_subjects.add(subject)
+        assets.append(
+            QuoteReelAsset(
+                path=path,
+                kind="video",
+                provider="comfyui_motion",
+                label=os.path.basename(path),
+                source_info={
+                    "provider": "comfyui_motion",
+                    "kind": "video",
+                    "label": os.path.basename(path),
+                    "search_term": term,
+                    "metadata_text": subject,
+                    "license": "Locally generated (SDXL still animated locally)",
+                    # Locally generated from a vetted seed frame: no stock
+                    # licence, nobody to credit, no release question to answer.
+                    "raw_text_free": True,
+                    "contains_people": False,
+                    "contains_property": False,
+                },
+            )
+        )
+
+    if len(assets) < count:
+        logger.info(
+            f"motion pool served {len(assets)}/{count} clips; "
+            f"{brand_motion.pool_status()} — falling back for the remainder"
+        )
+    return assets
+
+
 def _stock_provider() -> str:
     provider = str(
         config.app.get("quote_reel_stock_provider")
@@ -658,6 +737,18 @@ def select_media_assets(
         return uploaded
     media_source = str(config.app.get("quote_reel_media_source", "curated") or "curated").strip().lower()
     duration = duration or target_seconds()
+    if media_source == "comfyui_motion":
+        # Motion first, then the still generator, then the curated library. The
+        # pool is filled overnight and may legitimately be empty or partial —
+        # on a fresh install, or after a night the GPU was busy — so this
+        # degrades to the previous behaviour rather than failing the render.
+        motion = _comfyui_motion_assets(params)
+        if len(motion) >= 3:
+            return motion
+        # A partial pool would otherwise mix one clip with two stills, which
+        # cuts between moving and frozen footage inside one Reel. Prefer three
+        # of the same kind.
+        return _comfyui_assets(params) or motion or _library_assets()
     if media_source == "comfyui":
         return _comfyui_assets(params) or _library_assets()
     if media_source == "storyblocks":
@@ -1259,6 +1350,32 @@ def _schedule_if_enabled(
             "skipped": True,
             "error": "quote reel auto-scheduling disabled",
         }
+
+    # Auto-publish only the format that was actually approved.
+    #
+    # `select_media_assets` falls back to stills whenever the motion pool cannot
+    # supply three clips — on a fresh install, after a night the GPU was busy, or
+    # once the pool is drained by daily use. That fallback is right for
+    # *rendering*: a slideshow Reel beats a failed one. It is wrong for
+    # *publishing*: sign-off was given on motion Reels, and a stills Reel going
+    # out unattended under that approval is a silent substitution.
+    #
+    # So a Reel that fell back still renders and still lands in the review queue
+    # — it just needs a human to release it.
+    if _cfg_bool("quote_reel_require_motion_for_autopublish", True):
+        wanted = str(config.app.get("quote_reel_media_source", "") or "").strip().lower()
+        if wanted == "comfyui_motion":
+            still_backed = [a for a in (assets or []) if a.kind != "video"]
+            if still_backed or not assets:
+                return {
+                    "success": False,
+                    "skipped": True,
+                    "error": (
+                        f"motion pool could not dress this Reel "
+                        f"({len(still_backed)} of {len(assets or [])} scenes fell back "
+                        "to stills); queued for review instead of auto-publishing"
+                    ),
+                }
 
     from app.services import hashtags, postiz, series
 
