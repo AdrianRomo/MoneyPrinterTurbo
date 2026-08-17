@@ -1690,13 +1690,21 @@ def select_scene_assets(
     # a scene on the blank fallback. Half the scenes in the first Reel rendered
     # black for exactly this reason.
     generates_own = str(provider or "").strip().lower() == "comfyui" and searcher is None
+    # Subjects already spent in THIS reel. The generator is deterministic per
+    # (term, index), which is not the same as distinct across scenes — two
+    # different terms can resolve to one subject, and with only three to five
+    # shots in a 20s reel a repeated frame is immediately visible.
+    used_subjects: set[str] = set()
     for beat_index, scene in enumerate(scenes):
         queries = _scene_search_queries(scene, entities)
         if generates_own:
             from app.services import brand_footage
 
-            asset = brand_footage.asset_for_scene(queries[0] if queries else "", beat_index)
+            asset = brand_footage.asset_for_scene(
+                queries[0] if queries else "", beat_index, avoid=used_subjects
+            )
             if asset is not None:
+                used_subjects.add(asset.metadata_text)
                 asset.beat_index = beat_index
                 asset.illustrative = bool(getattr(scene, "is_contextual_visual", True))
                 asset.selection_reason = f"generated on-brand frame ({asset.metadata_text})"

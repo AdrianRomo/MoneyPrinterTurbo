@@ -128,15 +128,32 @@ def fetch_anchor(subject: str) -> Optional[tuple[str, str]]:
     return verse.reference, verse.text
 
 
-def guidance_block(subject: str = "") -> str:
-    """The reel discipline, as a prompt section appended to the system prompt."""
+def scene_target() -> int:
+    """How many shots a reel of this length should have.
+
+    Three to five per twenty seconds. A slow push-in on one image reads as
+    considered; fifteen cuts in seventy seconds reads as a screensaver, and the
+    baseline reel had exactly that.
+    """
+    return max(3, min(5, round(target_seconds() / 5.0)))
+
+
+def guidance_block(subject: str = "", include_anchor: bool = True) -> str:
+    """The reel discipline, as a prompt section appended to the system prompt.
+
+    ``include_anchor`` is off for Article Mode, whose own contract is that every
+    claim traces back to a source article. Handing that prompt a verse and
+    telling it to quote it would put words in the script that the sources do not
+    support — the length, hook and one-idea rules carry over, the scripture
+    anchor does not.
+    """
     budget = char_budget()
     seconds = int(round(target_seconds()))
 
     anchor_rule = (
         "7. Do not quote scripture. Refer to it only in your own words."
     )
-    if verse_anchor_enabled():
+    if include_anchor and verse_anchor_enabled():
         anchor = fetch_anchor(subject)
         if anchor:
             reference, text = anchor
