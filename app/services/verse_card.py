@@ -26,7 +26,7 @@ import random
 import re
 import time
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import requests
@@ -106,6 +106,25 @@ class Verse:
     reference: str
     text: str
     translation: str
+    # Individual verses behind this reference, as returned by the API:
+    # [{"book": str, "chapter": int, "verse": int, "text": str}]. Splitting a
+    # long passage happens on THESE boundaries — a card may never cut a verse
+    # part-way, and each card can state its own exact range.
+    verses: list = field(default_factory=list)
+
+
+# How much scripture one card carries before it is split across several.
+#
+# Measured, not guessed. At the text box each layout actually uses, and at
+# 0.062w — the smallest size where the type still reads as set rather than
+# crammed — a post fits ~191 characters and a story ~219. Beyond that `fit()`
+# grinds down to its min_size floor and then silently overflows the band: it
+# returns the wrapped lines regardless of whether they fit, which is how a
+# 1,100-character Psalm ran through the wordmark and into Instagram's own UI.
+#
+# Splitting instead of shrinking also keeps the photograph visible, which is
+# most of why these cards work at all.
+MAX_CHARS = {"post": 190, "story": 215}
 
 
 # --- config helpers ----------------------------------------------------------
@@ -155,9 +174,87 @@ def _remember_reference(reference: str, keep: int = 400) -> None:
         logger.warning(f"could not persist used reference: {exc}")
 
 
+def _todays_post_path() -> str:
+    return os.path.join(os.path.dirname(_state_path()), "todays_post.json")
+
+
+def _remember_todays_post(verse: Verse, bg: Image.Image, set_id: Optional[str]) -> None:
+    """Keep the day's feed card so its story twin can reuse verse and background.
+
+    Instagram's Content Publishing API cannot re-share a feed post to a story —
+    the native share, the one with the tap-through sticker, is app-only. So the
+    story has to be published as its own media, and rebuilding it from the same
+    verse over the same background is what makes a viewer read the two as one
+    post rather than two unrelated cards.
+    """
+    from datetime import datetime, timezone
+
+    bg_path = os.path.join(os.path.dirname(_state_path()), "todays_post_bg.jpg")
+    try:
+        bg.save(bg_path, "JPEG", quality=95, optimize=True)
+        with open(_todays_post_path(), "w", encoding="utf-8") as fh:
+            json.dump({
+                "date": datetime.now(timezone.utc).date().isoformat(),
+                "reference": verse.reference,
+                "text": verse.text,
+                "translation": verse.translation,
+                "set_id": set_id,
+                "bg_path": bg_path,
+            }, fh)
+    except (OSError, ValueError) as exc:
+        logger.warning(f"could not persist today's feed card: {exc}")
+
+
+def load_todays_post() -> Optional[dict]:
+    """The feed card generated today (UTC), or None. Quota days are UTC."""
+    from datetime import datetime, timezone
+
+    try:
+        with open(_todays_post_path(), encoding="utf-8") as fh:
+            record = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if record.get("date") != datetime.now(timezone.utc).date().isoformat():
+        return None
+    if not os.path.exists(str(record.get("bg_path", ""))):
+        return None
+    return record
+
+
+def twin_pending() -> bool:
+    """Is today's feed card still waiting for its story twin?
+
+    Deliberately not 'is this the first story of the day': a story left over
+    from a previous day's roll-forward can occupy the first slot, and the twin
+    would then be skipped on the one day it matters. The twin is defined by
+    pairing with the feed card, not by ordering.
+    """
+    record = load_todays_post()
+    return bool(record) and not record.get("twin_done")
+
+
+def mark_twin_done() -> None:
+    """Record that today's twin exists, so later runs publish standalone stories."""
+    record = load_todays_post()
+    if not record:
+        return
+    record["twin_done"] = True
+    try:
+        with open(_todays_post_path(), "w", encoding="utf-8") as fh:
+            json.dump(record, fh)
+    except OSError as exc:
+        logger.warning(f"could not mark today's twin as done: {exc}")
+
+
 # --- 1. reference selection (LLM proposes, API verifies) ---------------------
 
-_REF_RE = re.compile(r"^([1-3]\s*)?[A-Za-z][A-Za-z ]{1,20}\s+\d{1,3}:\d{1,3}(-\d{1,3})?$")
+_REF_RE = re.compile(r"^([1-3]\s*)?[A-Za-z][A-Za-z ]{1,20}\s+(\d{1,3}):(\d{1,3})(?:-(\d{1,3}))?$")
+
+# Splitting handles a long passage gracefully, but the best card is still one
+# thought. The regex used to accept any range, so "Psalm 139:7-18" — twelve
+# verses, ~1,100 characters — passed as a perfectly legal reference and produced
+# a wall of type. Cap it at the source and let split_verse() be the safety net.
+_MAX_VERSES_PER_REFERENCE = 4
 
 
 def pick_reference(theme: str = "", avoid: Optional[list[str]] = None) -> Optional[str]:
@@ -175,7 +272,9 @@ def pick_reference(theme: str = "", avoid: Optional[list[str]] = None) -> Option
         f"{avoid_clause}"
         "Reply with ONE Bible reference and nothing else — no verse text, no commentary, "
         "no quotation marks. Format exactly like: Philippians 4:6 or Psalm 23:1-3. "
-        "Choose a well-known, encouraging verse suitable for a general audience."
+        "Choose a well-known, encouraging verse suitable for a general audience. "
+        f"Use at most {_MAX_VERSES_PER_REFERENCE} consecutive verses — a single verse "
+        "is usually best. Long passages do not fit on a card."
     )
     try:
         raw = llm._generate_response(prompt)
@@ -185,8 +284,17 @@ def pick_reference(theme: str = "", avoid: Optional[list[str]] = None) -> Option
 
     candidate = (raw or "").strip().strip('"').strip("'").splitlines()[0].strip()
     candidate = re.sub(r"^[\s\-\*\d.]+", "", candidate).strip()
-    if not _REF_RE.match(candidate):
+    match = _REF_RE.match(candidate)
+    if not match:
         logger.warning(f"LLM returned an unusable reference: {candidate!r}")
+        return None
+    start, end = match.group(3), match.group(4)
+    if end and int(end) - int(start) + 1 > _MAX_VERSES_PER_REFERENCE:
+        logger.warning(
+            f"reference {candidate!r} spans "
+            f"{int(end) - int(start) + 1} verses (max {_MAX_VERSES_PER_REFERENCE}); "
+            "rejecting so a shorter one is chosen"
+        )
         return None
     return candidate
 
@@ -217,11 +325,86 @@ def fetch_verse(reference: str, translation: Optional[str] = None) -> Optional[V
     text = " ".join((data.get("text") or "").split())
     if not text:
         return None
+    verses = []
+    for item in (data.get("verses") or []):
+        vtext = " ".join(str(item.get("text") or "").split())
+        if not vtext:
+            continue
+        verses.append({
+            "book": str(item.get("book_name") or "").strip(),
+            "chapter": int(item.get("chapter") or 0),
+            "verse": int(item.get("verse") or 0),
+            "text": vtext,
+        })
     return Verse(
         reference=str(data.get("reference") or reference).strip(),
         text=text,
         translation=str(data.get("translation_id") or translation).upper(),
+        verses=verses,
     )
+
+
+def _format_reference(chunk: list) -> str:
+    """Exact reference for a run of verses, e.g. 'Psalms 139:7-9'."""
+    if not chunk:
+        return ""
+    book = chunk[0]["book"]
+    first, last = chunk[0], chunk[-1]
+    if first["chapter"] == last["chapter"]:
+        if first["verse"] == last["verse"]:
+            return f"{book} {first['chapter']}:{first['verse']}"
+        return f"{book} {first['chapter']}:{first['verse']}-{last['verse']}"
+    return (f"{book} {first['chapter']}:{first['verse']}-"
+            f"{last['chapter']}:{last['verse']}")
+
+
+def split_verse(verse: Verse, kind: str = "post") -> list:
+    """Split a passage across cards, on verse boundaries only.
+
+    Scripture is never cut mid-verse: a verse is the smallest unit a card may
+    carry. Verses are packed greedily up to the card's character budget, and a
+    single verse longer than the budget gets a card to itself rather than being
+    broken — the type shrinks for that one card, which is the lesser evil.
+
+    Each part gets its OWN exact reference (Psalms 139:7-9, then 139:10-13), so
+    a reader is never shown a range wider than the words in front of them.
+    Returns [verse] unchanged when it already fits.
+    """
+    budget = MAX_CHARS.get(kind, MAX_CHARS["post"])
+    if len(verse.text) <= budget:
+        return [verse]
+    if not verse.verses:
+        # No per-verse structure to split on (shouldn't happen with bible-api,
+        # but a card that overflows is worse than one that is merely long).
+        logger.warning(f"{verse.reference}: {len(verse.text)} chars and no verse "
+                       "structure to split on; leaving as one card")
+        return [verse]
+
+    chunks, current, current_len = [], [], 0
+    for item in verse.verses:
+        addition = len(item["text"]) + (1 if current else 0)
+        if current and current_len + addition > budget:
+            chunks.append(current)
+            current, current_len = [item], len(item["text"])
+        else:
+            current.append(item)
+            current_len += addition
+    if current:
+        chunks.append(current)
+
+    parts = [
+        Verse(
+            reference=_format_reference(chunk),
+            text=" ".join(c["text"] for c in chunk),
+            translation=verse.translation,
+            verses=chunk,
+        )
+        for chunk in chunks
+    ]
+    logger.info(f"{verse.reference} ({len(verse.text)} chars) split into "
+                f"{len(parts)} {kind} cards: "
+                + ", ".join(f"{p.reference} [{len(p.text)}]" for p in parts))
+    return parts
 
 
 def select_verse(theme: str = "", attempts: int = 4) -> Optional[Verse]:
@@ -362,18 +545,10 @@ def _draw_tracked(draw, xy, text: str, font, fill, tracking: float):
         x += draw.textlength(ch, font=font) + tracking
 
 
-def _feed_post_today() -> bool:
-    """Did a feed post go out today? Stories exist mainly to give it early
-    engagement velocity, which is what decides how far it travels."""
-    from datetime import datetime, timezone
-
-    from app.services.postiz import PostizService
-
-    return PostizService._count_kind_on("post", datetime.now(timezone.utc).date()) > 0
-
-
 def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
-                 out_path: Optional[str] = None, point_at_post: bool = False) -> str:
+                 out_path: Optional[str] = None, point_at_post: bool = False,
+                 series_label: Optional[str] = None,
+                 part_of: Optional[tuple] = None) -> str:
     w, h = ASPECTS.get(kind, ASPECTS["post"])
     img = _cover(bg, w, h)
 
@@ -407,7 +582,19 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
 
     rule_gap = int(font_v.size * 0.95)
     block_h = len(lines) * line_h + rule_gap + ref_size
-    block_top = band_top + (band_h - block_h) // 2
+    # Clamp to the top of the band. `fit()` returns wrapped lines even when they
+    # do not fit its box, so an over-long passage produced a block taller than
+    # the band; centring it then pushed the first line ABOVE band_top, through
+    # the story-safe zone, and the last line down through the wordmark.
+    # split_verse() should prevent this, so an overflow here is a bug worth
+    # seeing rather than absorbing silently.
+    if block_h > band_h:
+        logger.warning(
+            f"{verse.reference}: text block {block_h}px exceeds the {band_h}px "
+            f"{kind} band at {font_v.size}px — expected split_verse() to have "
+            "divided this passage"
+        )
+    block_top = max(band_top, band_top + (band_h - block_h) // 2)
 
     # Adaptive scrim: measure what is actually behind the text and darken only
     # as much as needed for white type to stay comfortably readable. A fixed
@@ -483,8 +670,13 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
     draw.line([((w - rule_w) / 2, rule_y), ((w + rule_w) / 2, rule_y)],
               fill=(255, 255, 255, 120), width=max(1, int(h * 0.0012)))
 
-    ref_text = f"{verse.reference}  ·  {verse.translation}".upper()
-    ty.draw_centered(draw, w, rule_y + int(rule_gap * 0.42), ref_text, font_r,
+    # The reference always states the verses ON THIS CARD, and when a passage is
+    # split the card says which part it is — so a reader can tell at a glance
+    # that there is more, and never sees a range wider than the words shown.
+    ref_text = f"{verse.reference}  ·  {verse.translation}"
+    if part_of and part_of[1] > 1:
+        ref_text += f"  ·  {part_of[0]} of {part_of[1]}"
+    ty.draw_centered(draw, w, rule_y + int(rule_gap * 0.42), ref_text.upper(), font_r,
                      (255, 255, 255, 235), ty.TRACK_MICRO)
 
     ok, reason = quality.check_card(final_lum)
@@ -506,6 +698,15 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
         f_ptr = ty.font(ty.SANS, int(w * 0.016), "Medium")
         ty.draw_centered(draw, w, int(h * 0.885), "NEW POST TODAY  ·  TAP THROUGH",
                          f_ptr, (255, 255, 255, 225), ty.TRACK_MICRO)
+
+    # Series line, above the verse block: it is a label, not part of the
+    # scripture, and putting it at the top stops it reading as a citation.
+    # Dimmer than the reference so the verse still leads the eye.
+    if series_label:
+        f_series = ty.font(ty.SANS, int(w * 0.0155), "Medium")
+        series_y = int(h * (0.085 if kind == "post" else 0.145))
+        ty.draw_centered(draw, w, series_y, series_label.upper(), f_series,
+                         (255, 255, 255, 170), ty.TRACK_MICRO)
 
     out_dir = "/influencer-automation-2.0/storage/verse_cards"
     os.makedirs(out_dir, exist_ok=True)
@@ -530,38 +731,115 @@ def build_caption(verse: Verse, set_id: Optional[str] = None) -> tuple[str, str]
 
 
 def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = None,
-                hashtag_set: Optional[str] = None) -> Optional[dict]:
-    """Full generation, no publishing. Returns {path, verse, caption, set_id}."""
+                hashtag_set: Optional[str] = None,
+                reference: Optional[str] = None,
+                series_label: Optional[str] = None) -> Optional[dict]:
+    """Full generation, no publishing. Returns {path, verse, caption, set_id}.
+
+    `reference` pins the verse instead of asking the LLM to propose one (used by
+    the series runs). It is still fetched from the bible API and rendered
+    verbatim — pinning removes the LLM from the choice, not the verification.
+    """
     if kind not in ASPECTS:
         logger.error(f"unknown card kind: {kind}")
         return None
-    verse = select_verse(theme)
+    if reference:
+        verse = fetch_verse(reference)
+        if not verse:
+            logger.error(f"series reference could not be fetched: {reference!r}")
+            return None
+    else:
+        verse = select_verse(theme)
     if not verse:
         return None
+    # A long passage becomes several cards rather than one crammed one. Each
+    # part shares the SAME background, so the set reads as one piece across a
+    # carousel or a run of stories.
+    parts = split_verse(verse, kind)
+    total = len(parts)
+
     # A rejected card means the background was too bright under the type even
     # after darkening; a different background is cheaper than a bad post.
-    path = ""
+    paths: list[str] = []
+    bg = None
     for attempt in range(1, 4):
         bg = generate_background(kind=kind, subject=subject)
         if bg is None:
             return None
-        path = compose_card(bg, verse, kind=kind,
-                            point_at_post=(kind == "story" and _feed_post_today()))
-        if path:
+        # Only the twin points at the feed post — see create_story_from_todays_post.
+        # This used to fire on any story generated on a day a post went out, but
+        # the pointer was decided at GENERATION time while the story can be
+        # scheduled into the next day, so it could promise "new post today" on a
+        # morning with no post. The twin cannot drift that way: it is built from
+        # the card it points at.
+        paths = []
+        for i, part in enumerate(parts, start=1):
+            p = compose_card(bg, part, kind=kind, series_label=series_label,
+                             part_of=(i, total))
+            if not p:
+                paths = []
+                break
+            paths.append(p)
+        if paths:
             break
         logger.warning(f"card rejected on contrast; regenerating background ({attempt}/3)")
-    if not path:
+    if not paths:
         logger.error("could not produce a legible card after 3 backgrounds")
         return None
     _remember_reference(verse.reference)
     caption, set_id = build_caption(verse, hashtag_set)
-    if kind == "story" and _feed_post_today():
-        caption = f"{caption}\n\nNew post on the grid today."
-    return {"path": path, "verse": verse, "caption": caption, "kind": kind, "set_id": set_id}
+    if series_label:
+        # The first line of a caption is what Instagram indexes for search, so
+        # the series name leads rather than trailing after the verse.
+        caption = f"{series_label}\n\n{caption}"
+    if kind == "post" and bg is not None:
+        _remember_todays_post(verse, bg, set_id)
+    return {"path": paths[0], "paths": paths, "parts": parts,
+            "verse": verse, "caption": caption, "kind": kind,
+            "set_id": set_id, "series_label": series_label}
+
+
+def create_story_from_todays_post() -> Optional[dict]:
+    """The story twin of today's feed card: same verse, same background, at 9:16.
+
+    Returns None when there is no feed card today, or when the story crop fails
+    the contrast gate — the caller then falls back to an independent story, so a
+    bad crop costs variety rather than the whole slot.
+    """
+    record = load_todays_post()
+    if not record:
+        return None
+    try:
+        bg = Image.open(record["bg_path"]).convert("RGB")
+    except (OSError, ValueError, KeyError) as exc:
+        logger.warning(f"could not reopen today's background: {exc}")
+        return None
+    verse = Verse(reference=record["reference"], text=record["text"],
+                  translation=record["translation"])
+    # The background cleared the gate at 4:5; the 9:16 crop samples different
+    # pixels, so it is measured again rather than assumed.
+    path = compose_card(bg, verse, kind="story", point_at_post=True)
+    if not path:
+        logger.warning("story twin rejected on contrast; falling back to a fresh story")
+        return None
+    # Deliberately NOT reusing the post's hashtag set: insights attribute reach
+    # per set, and scoring one set with both a feed post and a story on the same
+    # day would bias the rotation with numbers the two surfaces do not share.
+    caption, set_id = build_caption(verse, None)
+    caption = f"{caption}\n\nNew post on the grid today."
+    logger.info(f"story twin of today's feed card: {verse.reference}")
+    return {"path": path, "verse": verse, "caption": caption, "kind": "story",
+            "set_id": set_id, "twin_of_post": True}
 
 
 def publish_card(card: dict, publish_at=None) -> dict:
-    """Hand a generated card to Postiz as a feed post or a story."""
+    """Hand a generated card to Postiz as a feed post or a story.
+
+    A split passage publishes as a CAROUSEL in the feed and as a RUN of stories,
+    because Instagram allows several images in one post but only one per story.
+    """
+    from datetime import timedelta
+
     from app.services.postiz import PostizService
 
     svc = PostizService()
@@ -579,12 +857,49 @@ def publish_card(card: dict, publish_at=None) -> dict:
             return selected
         publish_at = selected.get("publish_at") or selected.get("date")
 
-    upload = svc.upload_media(card["path"])
-    if not upload.get("success"):
-        return upload
-    result = svc.schedule_post(upload["media"], card["caption"], publish_at,
-                               integration=integration["integration"], kind=kind,
-                               set_id=card.get("set_id"))
+    paths = card.get("paths") or [card["path"]]
+    # Instagram's hard limit on carousel children. A passage needing more than
+    # ten cards is not a post, it is a chapter — publish the first ten and say so.
+    if kind == "post" and len(paths) > 10:
+        logger.warning(f"{len(paths)} cards exceeds Instagram's 10-image carousel "
+                       "limit; publishing the first 10")
+        paths = paths[:10]
+
+    media = []
+    for path in paths:
+        upload = svc.upload_media(path)
+        if not upload.get("success"):
+            return upload
+        media.append(upload["media"])
+
+    if kind == "story":
+        # Instagram stories take exactly one image each ("if it's a story, it can
+        # have only one picture" — Postiz's own provider). A split passage is
+        # therefore a RUN of stories, spaced a few minutes apart so they appear
+        # in reading order in the tray.
+        results = []
+        for i, item in enumerate(media):
+            at = publish_at + timedelta(minutes=2 * i) if i else publish_at
+            res = svc.schedule_post(item, card["caption"], at,
+                                    integration=integration["integration"], kind=kind,
+                                    set_id=card.get("set_id") if i == 0 else None)
+            results.append(res)
+            if not res.get("success"):
+                logger.error(f"story part {i + 1}/{len(media)} failed: "
+                             f"{res.get('error') or res.get('message')}")
+                break
+        result = results[0] if results else {"success": False, "error": "no story parts"}
+        result = dict(result)
+        result["parts"] = len(results)
+    else:
+        # One post; several media makes it a carousel (media_type=CAROUSEL).
+        result = svc.schedule_post(media if len(media) > 1 else media[0],
+                                   card["caption"], publish_at,
+                                   integration=integration["integration"], kind=kind,
+                                   set_id=card.get("set_id"))
+        result = dict(result)
+        result["parts"] = len(media)
+
     if result.get("success") and card.get("set_id"):
         # Only mark the set as used once the post actually exists, so a failed
         # publish does not skew the rotation.

@@ -15,8 +15,10 @@ This module decides *whether*; postiz.py decides *when*. Quota is read before
 generating, so a double run is a no-op rather than a duplicate post, and no GPU
 time is spent on something that would only be deferred.
 
-Quota days are UTC, matching the ledger; windows are local via a fixed offset,
-so there is no tzdata dependency.
+Quota days and windows are both the account's LOCAL civil day (content_timezone,
+default America/Mexico_City). They used to disagree — quota in UTC, windows
+local — and at -6 the UTC day rolls over at 18:00 local, so every evening slot
+drew from a fresh, empty quota.
 
     python3 -m app.services.content_scheduler --dry-run
 """
@@ -31,22 +33,24 @@ from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 from app.config import config
-from app.services.postiz import PostizService
+from app.services.postiz import PostizService, _local_date
 
 # per_day is a target, not a licence to spend: the real ceiling is still
 # postiz_daily_quota_<kind>. The time of day comes from the publishing windows
 # in postiz.py (postiz_window_<kind>), not from here.
 #
-# Only one story a day, and deliberately so: stories are shown mainly to people
-# who already follow you, so on a young account they are a retention surface,
-# not a discovery one. Reels and carousels are what actually grow reach, so they
-# get the slots.
+# Three stories a day: the first is the story twin of the day's feed card
+# (same verse, same background, pointing at the post), published just after it
+# to give it early engagement velocity; the other two stand alone.
+#
+# One window per story, not one window shared by three — see _windows_for in
+# postiz.py. The scheduler produces at most one item per kind per run, so three
+# stories need three runs, and by the second run a single shared window is
+# mostly in the past.
 PLAN = {
     "post":     {"per_day": 1},
-    "story":    {"per_day": 1},
-    # Every other day, and Sunday counts double: faith audiences are markedly
-    # more active on Sundays, and carousels reward unhurried scrolling.
-    "carousel": {"per_day": 1, "min_interval_days": 2, "sunday_interval_days": 1},
+    "story":    {"per_day": 3},
+    "carousel": {"per_day": 1},
 }
 
 STORY_THEMES = ["peace and rest", "trust in the everyday", "gratitude",
@@ -71,7 +75,7 @@ def _days_since_last(kind: str) -> int:
         last_date = datetime.strptime(last, "%Y-%m-%d").date()
     except (ValueError, TypeError):
         return 10_000
-    return (datetime.now(timezone.utc).date() - last_date).days
+    return (_local_date(datetime.now(timezone.utc)) - last_date).days
 
 
 def due(kind: str, now_utc: datetime, svc: PostizService) -> tuple[bool, str]:
@@ -81,7 +85,9 @@ def due(kind: str, now_utc: datetime, svc: PostizService) -> tuple[bool, str]:
     a random time inside the format's window.
     """
     plan = PLAN[kind]
-    today = now_utc.date()
+    # The local civil day, not the UTC one: with a -6 offset the UTC day rolls
+    # over at 18:00 local, which handed every evening slot a fresh empty quota.
+    today = _local_date(now_utc)
     used = PostizService._count_kind_on(kind, today)
     if used >= min(plan["per_day"], svc.type_quotas.get(kind, 0)):
         return False, f"already published {used} today (target {plan['per_day']})"
@@ -103,6 +109,7 @@ def produce(kind: str) -> dict:
     import random
 
     from app.services import carousel as ca
+    from app.services import series
     from app.services import verse_card as vc
 
     if kind == "carousel":
@@ -110,6 +117,37 @@ def produce(kind: str) -> dict:
         if not car:
             return {"success": False, "error": "carousel build failed"}
         return ca.publish(car)
+
+    # One story a day is the twin of the feed card, so the two read as one post.
+    # PLAN runs 'post' before 'story', so within a single run the card already
+    # exists by the time we get here. The other stories stand alone.
+    if kind == "story" and vc.twin_pending():
+        twin = vc.create_story_from_todays_post()
+        if twin:
+            result = vc.publish_card(twin)
+            if result.get("success"):
+                vc.mark_twin_done()
+            return result
+
+    # Feed cards run as a SERIES, not a random theme. A one-off card earns a
+    # save; a numbered run earns a follow, because tomorrow is part 4 of
+    # something someone already started. Stories stay themed and standalone —
+    # they expire in a day, so continuity there buys nothing.
+    if kind == "post":
+        part = series.current()
+        if part:
+            card = vc.create_card(kind="post", subject=part["subject"],
+                                  reference=part["reference"],
+                                  series_label=series.label(part))
+            if not card:
+                return {"success": False, "error": "series card generation failed"}
+            result = vc.publish_card(card)
+            # Advance only on a real publish, so a failed render retries the
+            # same part rather than silently skipping it.
+            if result.get("success"):
+                series.advance(part["series_id"])
+            return result
+        logger.warning("no series defined; falling back to a random theme")
 
     theme = random.choice(STORY_THEMES if kind == "story" else POST_THEMES)
     card = vc.create_card(kind="story" if kind == "story" else "post", theme=theme)
