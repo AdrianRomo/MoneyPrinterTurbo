@@ -48,8 +48,69 @@ NON_PLACES = {
     "featured", "quality image", "wallpaper", "stock",
 }
 
-MIN_WIDTH = 1800
-MIN_HEIGHT = 1200
+# --- Sizing, all of it measured against the crop -------------------------
+#
+# Slides are a 4:5 portrait frame, so a landscape photo loses most of its width
+# to the centre crop. Every size rule below is therefore expressed against the
+# CROP and never against the file, because the two come apart badly: a
+# 12500x2332 panorama is an enormous file and a 286px-wide slide.
+TARGET_W, TARGET_H = 1440, 1800
+
+# Margin over the crop's hard requirement, applied only when a bigger fetch was
+# needed anyway. Resolving detail *down* with LANCZOS is what makes a slide look
+# sharp; arriving at the exact size leaves nothing to resolve.
+OVERSAMPLE = 1.15
+
+# upload.wikimedia.org serves thumbnails up to 3840px wide and silently snaps
+# larger requests down to it — while the API still reports the width you asked
+# for. Trust the downloaded image, never `thumbwidth`.
+COMMONS_MAX_THUMB = 3840
+
+# What search() asks for. Kept modest: most candidates are never downloaded,
+# and download() re-asks at the width the crop actually needs.
+SEARCH_THUMB_WIDTH = 1600
+
+# Past this ratio the crop cannot fill the frame even from a 3840px thumbnail
+# (3840 / 1800 = 2.13), and a 4:5 crop of a panorama is an arbitrary sliver of
+# a photograph that was composed to be wide. Both reasons point the same way,
+# so the wide limit is a quality gate and a composition gate at once.
+MAX_ASPECT = 2.05
+MIN_ASPECT = 0.50
+
+# Commons' search ANDs its terms, so a three-word query like "whale ocean
+# breaching" demands all three appear and returns nothing. Subject queries are
+# therefore OR groups of single words — which restores the pool but widens the
+# tail, because an OR clause only has to match *one* term to rank. These two
+# guards keep the tail honest, and both work the way the location parser does:
+# checked against the file's own metadata, never inferred.
+
+# A result must actually mention one of the terms it was searched for. Latin
+# binomials are deliberately included in the subject queries so that they widen
+# the search and this check together.
+#
+# Matching starts at a word boundary but does not end at one, so "moon" still
+# accepts "moons" while no longer accepting the "m" of "airborne". Plain
+# substring matching let an iceberg through on the "milky" inside a sentence.
+def _term_pattern(query: str) -> Optional[re.Pattern]:
+    terms = [t for t in re.findall(r"[A-Za-zÀ-ÿ]{3,}", query) if t.upper() != "OR"]
+    if not terms:
+        return None
+    # A trailing "s" is trimmed so a plural query term still matches singular
+    # prose ("mountains" against "a mountain peak"). Irregular plurals are not
+    # inferred — spell both forms in the query instead, as "galaxy OR galaxies"
+    # does; guessing at morphology is how a guard starts inventing things.
+    stems = {t[:-1] if len(t) > 4 and t.lower().endswith("s") else t for t in terms}
+    return re.compile(r"\b(?:%s)" % "|".join(re.escape(t) for t in sorted(stems)), re.I)
+
+
+# This format promises real photographs. The astronomy pools in particular are
+# full of "artist's impression" renderings, which are exactly what the module
+# exists to exclude.
+NOT_PHOTOGRAPHS = re.compile(
+    r"artist'?s\s+(impression|concept)|illustration|diagram|artwork|painting"
+    r"|drawing|\brender(ing)?\b|simulation|\bchart\b|\bmap\b|\blogo\b",
+    re.I,
+)
 
 # Commons' own curated quality pools — the difference between this format
 # looking premium and looking like a stock-photo dump.
@@ -73,6 +134,54 @@ class Photo:
 
 def _plain(html: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", html or "")).strip()
+
+
+def crop_dimensions(width: int, height: int,
+                    target: tuple[int, int] = (TARGET_W, TARGET_H)) -> tuple[int, int]:
+    """The pixels of a source that survive a centre crop to the target ratio."""
+    tw, th = target
+    if width <= 0 or height <= 0:
+        return (0, 0)
+    if width * th > height * tw:      # wider than the frame: height is binding
+        return (int(height * tw / th), height)
+    return (width, int(width * th / tw))
+
+
+def fetch_width_for(width: int, height: int,
+                    target: tuple[int, int] = (TARGET_W, TARGET_H)) -> int:
+    """The source width at which the centre crop exactly fills the frame.
+
+    This is the whole fix for soft carousels: the search thumbnail is sized by
+    *width*, but a portrait crop is paid for in *height*, so a 16:9 thumbnail
+    that looks generous at 1920px yields 864 usable pixels and gets upscaled.
+
+    Returns the hard requirement, without OVERSAMPLE — callers add that margin
+    when they fetch, so that wanting a nicer downscale never on its own costs a
+    round-trip for a source that was already big enough.
+    """
+    tw, th = target
+    if width <= 0 or height <= 0:
+        return tw
+    return int(th * (width / height)) if width * th > height * tw else tw
+
+
+def _thumb_url(title: str, width: int) -> Optional[str]:
+    """Re-ask the API for one file at a specific rendition width."""
+    params = {
+        "action": "query", "format": "json", "titles": title,
+        "prop": "imageinfo", "iiprop": "url|size", "iiurlwidth": width,
+    }
+    try:
+        r = requests.get(API, params=params, headers={"User-Agent": UA}, timeout=30)
+        r.raise_for_status()
+        pages = r.json().get("query", {}).get("pages", {})
+        for page in pages.values():
+            info = (page.get("imageinfo") or [{}])[0]
+            if info.get("thumburl"):
+                return info["thumburl"]
+    except (requests.exceptions.RequestException, ValueError, KeyError) as exc:
+        logger.warning(f"could not size up {title}: {exc}")
+    return None
 
 
 def _extract_location(title: str, object_name: str = "") -> Optional[str]:
@@ -130,6 +239,7 @@ def search(subject: str, limit: int = 24, extra_pool: Optional[str] = None) -> l
     """Find high-quality, correctly-licensed photos for a subject."""
     out: list[Photo] = []
     seen: set[str] = set()
+    term_re = _term_pattern(subject)
     pools = ([extra_pool] if extra_pool else []) + QUALITY_POOLS
     for pool in pools:
         if len(out) >= limit:
@@ -139,9 +249,12 @@ def search(subject: str, limit: int = 24, extra_pool: Optional[str] = None) -> l
             "generator": "search",
             "gsrsearch": f"filetype:bitmap {pool} {subject}",
             "gsrlimit": limit, "gsrnamespace": 6,
-            "prop": "imageinfo",
+            # Categories ride along in the same request; they are what makes the
+            # relevance check work on files titled with a Latin binomial.
+            "prop": "imageinfo|categories",
             "iiprop": "url|size|extmetadata",
-            "iiurlwidth": 1600,
+            "iiurlwidth": SEARCH_THUMB_WIDTH,
+            "cllimit": "max",
         }
         try:
             r = requests.get(API, params=params, headers={"User-Agent": UA}, timeout=30)
@@ -161,14 +274,37 @@ def search(subject: str, limit: int = 24, extra_pool: Optional[str] = None) -> l
             licence = field("LicenseShortName")
             if not licence or not ALLOWED_LICENCES.match(licence.strip()):
                 continue
-            if info.get("width", 0) < MIN_WIDTH or info.get("height", 0) < MIN_HEIGHT:
+
+            # Everything the file says about itself. This must span the same
+            # text Commons searched — title AND description — or the guard drops
+            # results the search legitimately matched on prose.
+            #
+            # Categories are included when present but are never depended on:
+            # the API truncates them across a generator batch (it returns a
+            # clcontinue token), so a category-only rule would drop files purely
+            # for appearing late in the response. That failure is invisible.
+            title = page.get("title", "")
+            cats = " ".join(c.get("title", "") for c in (page.get("categories") or []))
+            about = f"{title} {cats} {field('ImageDescription')} {field('ObjectName')}"
+            if term_re and not term_re.search(about):
+                continue
+            # Only title and categories for this one: a description is free prose
+            # and mentioning "a map of the area" must not disqualify a photograph.
+            if NOT_PHOTOGRAPHS.search(f"{title} {cats}"):
+                continue
+            # Judge the original by what survives the crop, not by its raw size.
+            src_w, src_h = info.get("width", 0), info.get("height", 0)
+            crop_w, crop_h = crop_dimensions(src_w, src_h)
+            if crop_w < TARGET_W or crop_h < TARGET_H:
+                continue
+            aspect = src_w / src_h if src_h else 0
+            if not MIN_ASPECT <= aspect <= MAX_ASPECT:
                 continue
             url = info.get("thumburl") or info.get("url")
             if not url or url in seen:
                 continue
             seen.add(url)
 
-            title = page.get("title", "")
             out.append(Photo(
                 title=title,
                 url=url,
@@ -185,9 +321,23 @@ def search(subject: str, limit: int = 24, extra_pool: Optional[str] = None) -> l
     return out
 
 
-def download(photo: Photo) -> Optional[Image.Image]:
+def download(photo: Photo,
+             target: tuple[int, int] = (TARGET_W, TARGET_H)) -> Optional[Image.Image]:
+    """Fetch a photo at a rendition big enough to survive the crop.
+
+    `photo.url` is the search thumbnail, which is sized for browsing, not for a
+    portrait crop. Only go back to the API when the crop actually needs more —
+    most portrait sources are already fine at the search width.
+    """
+    url = photo.url
+    if fetch_width_for(photo.width, photo.height, target) > SEARCH_THUMB_WIDTH:
+        want = int(fetch_width_for(photo.width, photo.height, target) * OVERSAMPLE)
+        want = min(want, photo.width or COMMONS_MAX_THUMB, COMMONS_MAX_THUMB)
+        bigger = _thumb_url(photo.title, want)
+        if bigger:
+            url = bigger
     try:
-        r = requests.get(photo.url, headers={"User-Agent": UA}, timeout=60)
+        r = requests.get(url, headers={"User-Agent": UA}, timeout=90)
         r.raise_for_status()
         return Image.open(io.BytesIO(r.content)).convert("RGB")
     except (requests.exceptions.RequestException, OSError) as exc:
