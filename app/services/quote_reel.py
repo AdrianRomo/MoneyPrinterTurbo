@@ -519,6 +519,61 @@ def _storyblocks_assets(
     return assets
 
 
+def _comfyui_assets(params: VideoParams, *, count: int = 3) -> list[QuoteReelAsset]:
+    """Generate the backdrop locally instead of searching stock.
+
+    Article Mode already moved to this (see the commit that added
+    brand_footage.search_images_comfyui): theological search terms have no honest
+    stock photography, and "angelic figure" reliably returns costume shoots. The
+    quote lane wants the same thing for a second reason — a generated still under
+    a slow push is closer to the reference Reels than any stock clip, and no other
+    account is running the same footage.
+    """
+    from app.services import brand_footage
+
+    assets: list[QuoteReelAsset] = []
+    # generate_frame caches by subject, so two different search terms can resolve
+    # to the same subject and hand back the identical file — which cuts from a
+    # shot straight back to that same shot mid-reel.
+    seen: set[str] = set()
+    for term in _quote_search_terms(params):
+        if len(assets) >= count:
+            break
+        try:
+            generated = brand_footage.search_images_comfyui(term, per_page=1)
+        except Exception as exc:
+            logger.warning(f"comfyui quote reel generation failed for {term!r}: {exc}")
+            continue
+        for item in generated:
+            path = str(getattr(item, "url", "") or "").strip()
+            if not path or not os.path.exists(path) or path in seen:
+                continue
+            seen.add(path)
+            assets.append(
+                QuoteReelAsset(
+                    path=path,
+                    kind="image",
+                    provider="comfyui",
+                    label=os.path.basename(path),
+                    source_info={
+                        "provider": "comfyui",
+                        "kind": "image",
+                        "label": os.path.basename(path),
+                        "search_term": term,
+                        "metadata_text": getattr(item, "metadata_text", "") or "",
+                        "license": getattr(item, "license_name", "") or "",
+                        # Locally generated: no stock licence, nobody to credit,
+                        # and no release question to answer.
+                        "raw_text_free": True,
+                        "contains_people": False,
+                        "contains_property": False,
+                    },
+                )
+            )
+            break
+    return assets
+
+
 def _stock_provider() -> str:
     provider = str(
         config.app.get("quote_reel_stock_provider")
@@ -615,6 +670,8 @@ def select_media_assets(
         return uploaded
     media_source = str(config.app.get("quote_reel_media_source", "curated") or "curated").strip().lower()
     duration = duration or target_seconds()
+    if media_source == "comfyui":
+        return _comfyui_assets(params) or _library_assets()
     if media_source == "storyblocks":
         return _storyblocks_assets(task_id or "quote-reel", params, duration=duration) or _library_assets()
     if media_source in {"pexels", "pixabay", "coverr", "stock"}:
@@ -629,6 +686,7 @@ def select_media_assets(
         task = task_id or "quote-reel"
         return (
             _library_assets()
+            or _comfyui_assets(params)
             or _storyblocks_assets(task, params, duration=duration)
             or _stock_assets(task, params, duration=duration)
         )

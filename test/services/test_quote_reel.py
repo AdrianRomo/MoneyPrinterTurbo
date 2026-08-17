@@ -602,6 +602,27 @@ class TestQuoteReelTypography(unittest.TestCase):
         self.assertTrue(result["measured"])
         self.assertFalse(result["readable"])
 
+    def test_comfyui_source_never_repeats_a_cached_frame(self):
+        # generate_frame caches by subject, so distinct terms can resolve to one
+        # file — which cut from a shot straight back to that same shot.
+        from types import SimpleNamespace
+
+        frame = SimpleNamespace(url="/tmp/brand-a.jpg", metadata_text="a path at dusk")
+        other = SimpleNamespace(url="/tmp/brand-b.jpg", metadata_text="mist over a meadow")
+        params = VideoParams(
+            video_subject="quiet beauty", content_mode=quote_reel.CONTENT_MODE
+        )
+
+        with (
+            patch("app.services.brand_footage.search_images_comfyui") as generate,
+            patch.object(quote_reel.os.path, "exists", return_value=True),
+        ):
+            generate.side_effect = [[frame], [other], [frame], [frame], [frame], [frame]]
+            assets = quote_reel._comfyui_assets(params, count=3)
+
+        self.assertEqual([a.path for a in assets], ["/tmp/brand-a.jpg", "/tmp/brand-b.jpg"])
+        self.assertTrue(all(a.provider == "comfyui" for a in assets))
+
     def test_music_bed_is_skipped_when_disabled(self):
         with patch.dict(
             quote_reel.config.app, {"quote_reel_music_enabled": False}, clear=False

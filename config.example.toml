@@ -358,7 +358,11 @@ postiz_post_type = "post"
 # until the configured media directory contains raw, text-free footage.
 quote_reel_auto_schedule_enabled = false
 quote_reel_media_dir = ""
-quote_reel_media_source = "curated" # curated | storyblocks | pexels | pixabay | coverr | stock | auto
+# curated | comfyui | storyblocks | pexels | pixabay | coverr | stock | auto
+# "comfyui" generates the backdrop on the local GPU instead of searching stock —
+# the same move Article Mode made, and the closest match to the reference Reels.
+# "auto" tries curated, then comfyui, then storyblocks, then stock.
+quote_reel_media_source = "curated"
 quote_reel_stock_provider = "pexels" # used when quote_reel_media_source = "stock" or auto falls through
 quote_reel_target_seconds = 15
 # Drives the quote, the caption call-to-action, the fallback lines and the
