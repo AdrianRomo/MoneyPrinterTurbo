@@ -636,3 +636,25 @@ class TestQuoteReelTypography(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestQuoteCasing(unittest.TestCase):
+    """Models return lowercase openings often enough that one shipped."""
+
+    def test_lowercase_opening_is_capitalised(self):
+        self.assertEqual(
+            quote_reel.clean_quote("the breath that settles."),
+            "The breath that settles.",
+        )
+
+    def test_capitalisation_skips_the_accent_marker(self):
+        self.assertEqual(
+            quote_reel.clean_quote("*the breath* settles."),
+            "*The breath* settles.",
+        )
+
+    def test_an_existing_capital_is_left_alone(self):
+        self.assertEqual(quote_reel.clean_quote("Already capital."), "Already capital.")
+
+    def test_a_quote_opening_on_a_digit_is_untouched(self):
+        self.assertEqual(quote_reel.clean_quote("123 numbers first"), "123 numbers first")

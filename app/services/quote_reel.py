@@ -166,6 +166,21 @@ def clean_quote(text: str) -> str:
     quote = quote.strip(" -")
     if len(quote) > MAX_QUOTE_CHARS:
         quote = quote[: MAX_QUOTE_CHARS - 1].rsplit(" ", 1)[0].rstrip(".,;:") + "."
+    return _open_with_a_capital(quote)
+
+
+def _open_with_a_capital(quote: str) -> str:
+    """Capitalise the opening letter, skipping any accent marker.
+
+    Models return the quote lowercased often enough that it shipped that way —
+    "the breath that settles after sunrise" reads as a typo on a finished Reel,
+    and the accent marker means the first character is not always a letter.
+    """
+    for index, char in enumerate(quote):
+        if char.isalpha():
+            return quote[:index] + char.upper() + quote[index + 1:]
+        if char not in "*\"'“‘(":
+            break
     return quote
 
 
