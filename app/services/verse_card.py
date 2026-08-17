@@ -39,8 +39,11 @@ from app.services import quality, typography as ty
 # --- constants ---------------------------------------------------------------
 
 # Instagram: 4:5 is the tallest permitted feed ratio; 9:16 for stories.
+# Feed cards render at 1440 wide for the same reason carousels do — Instagram
+# serves feed images up to 1440px on high-DPI screens. Stories stay at 1080
+# because 1080x1920 IS the story surface; there is nothing above it to serve.
 ASPECTS = {
-    "post": (1080, 1350),
+    "post": (1440, 1800),
     "story": (1080, 1920),
 }
 # SDXL is trained on ~1 megapixel buckets; generating at a native bucket and
@@ -425,8 +428,49 @@ def select_verse(theme: str = "", attempts: int = 4) -> Optional[Verse]:
 # --- 3. background generation (local ComfyUI / SDXL) -------------------------
 
 
-def _workflow(prompt: str, width: int, height: int, seed: int, ckpt: str) -> dict:
-    return {
+def hires_size(bucket: tuple[int, int], target: tuple[int, int]) -> tuple[int, int]:
+    """Second-pass size: big enough to cover the canvas, at the BUCKET's ratio.
+
+    Upscaling straight to the canvas ratio would stretch the image — the 4:5
+    canvas and the 896x1152 bucket are not the same shape. Keeping the bucket's
+    ratio and letting `_cover` crop the difference preserves the geometry SDXL
+    composed. Latent dimensions must be multiples of 8.
+    """
+    bw, bh = bucket
+    tw, th = target
+    if bw <= 0 or bh <= 0:
+        return target
+    scale = max(tw / bw, th / bh)
+    if scale <= 1.0:
+        return bucket                      # already covers the canvas
+    return (max(8, round(bw * scale / 8) * 8), max(8, round(bh * scale / 8) * 8))
+
+
+def _workflow(prompt: str, width: int, height: int, seed: int, ckpt: str,
+              hires: Optional[tuple[int, int]] = None) -> dict:
+    """SDXL at a native bucket, then an optional detail pass at output size.
+
+    The cards were being generated at 896x1152 and enlarged to fill the canvas —
+    a 1.21x upscale for feed posts and 1.43x for stories, so every card and
+    story ever published was softer than it needed to be. Generating larger
+    outright is not the fix: off-bucket sizes are what produce duplicated
+    subjects, which is why the buckets are there.
+
+    So the composition is still decided at the bucket, and a second low-denoise
+    pass re-samples it at output size. Denoise is 0.4 — high enough to resolve
+    real detail rather than interpolate it, low enough that the composition,
+    and with it the negative prompt's guarantees about what is in frame, does
+    not change.
+
+    The first pass keeps its previous settings exactly (30 steps, cfg 6.0, same
+    seed), so the composition a given seed produces is unchanged — only its
+    resolution is. `brand_motion._seed_workflow` runs the same two-pass shape
+    for Reel seed frames and stays deliberately separate: it is tuned for
+    photoreal stills (cfg 5.0, denoise 0.45) and its own comment explains why
+    it would not impose those settings on the daily feed. This pass exists for
+    the cards' own sake, not to serve the Reels.
+    """
+    flow = {
         "3": {
             "class_type": "KSampler",
             "inputs": {
@@ -444,21 +488,38 @@ def _workflow(prompt: str, width: int, height: int, seed: int, ckpt: str) -> dic
         "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
         "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "versecard"}},
     }
+    if hires and hires != (width, height):
+        hw, hh = hires
+        flow["10"] = {"class_type": "LatentUpscale",
+                      "inputs": {"samples": ["3", 0], "upscale_method": "bislerp",
+                                 "width": hw, "height": hh, "crop": "disabled"}}
+        flow["11"] = {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": seed, "steps": 20, "cfg": 6.0,
+                "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": 0.4,
+                "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0],
+                "latent_image": ["10", 0],
+            },
+        }
+        flow["8"]["inputs"]["samples"] = ["11", 0]
+    return flow
 
 
 def generate_background(kind: str = "post", subject: Optional[str] = None,
                         seed: Optional[int] = None, timeout: int = 300) -> Optional[Image.Image]:
     base = _comfy_url()
     width, height = SDXL_BUCKET.get(kind, SDXL_BUCKET["post"])
+    hires = hires_size((width, height), ASPECTS.get(kind, ASPECTS["post"]))
     subject = subject or random.choice(BACKGROUND_SUBJECTS)
     prompt = f"{subject}, {STYLE_SUFFIX}"
     seed = seed if seed is not None else random.randint(1, 2**31 - 1)
     ckpt = str(_cfg("comfyui_checkpoint", "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"))
 
-    logger.info(f"generating background ({kind} {width}x{height}): {subject}")
+    logger.info(f"generating background ({kind} {width}x{height} -> {hires[0]}x{hires[1]}): {subject}")
     try:
         resp = requests.post(f"{base}/prompt",
-                             json={"prompt": _workflow(prompt, width, height, seed, ckpt)},
+                             json={"prompt": _workflow(prompt, width, height, seed, ckpt, hires)},
                              timeout=30)
         resp.raise_for_status()
         prompt_id = resp.json()["prompt_id"]
