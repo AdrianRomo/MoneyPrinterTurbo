@@ -25,6 +25,12 @@ MIN_RATIO = 2.8      # below this the card is rejected -> L >= 0.325
 
 MIN_CAROUSEL_SLIDES = 4
 
+# A slide is never built by enlarging its photograph. Carousels went out soft
+# for weeks because nothing measured this: the images were correctly licensed,
+# correctly labelled and distinct, and the gate had no opinion about whether
+# there were enough pixels behind them.
+MAX_SLIDE_UPSCALE = 1.02
+
 
 def luminance_under(img: Image.Image, mask: Image.Image) -> Optional[float]:
     """Mean relative luminance of `img` where `mask` is non-zero (0.0–1.0)."""
@@ -79,7 +85,12 @@ def check_carousel(car: dict) -> tuple[bool, str]:
     urls = [u for u in urls if u]
     if len(set(urls)) != len(urls):
         return False, "carousel contains the same photograph twice"
-    return True, f"{len(paths)} slides, all distinct"
+    scales = [s for s in (car.get("scales") or []) if s]
+    worst = max(scales) if scales else 0.0
+    if worst > MAX_SLIDE_UPSCALE:
+        return False, f"slide source upscaled {worst:.2f}x (max {MAX_SLIDE_UPSCALE}x)"
+    sharpness = f", worst source scale {worst:.2f}x" if scales else ""
+    return True, f"{len(paths)} slides, all distinct{sharpness}"
 
 
 def log_result(label: str, ok: bool, reason: str) -> None:
