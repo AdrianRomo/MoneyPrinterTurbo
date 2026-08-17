@@ -321,6 +321,37 @@ def _caption_for_script(script) -> str:
     return caption[:2200].strip()
 
 
+def _video_seconds(path: str) -> Optional[float]:
+    try:
+        from moviepy import VideoFileClip
+
+        with VideoFileClip(path) as clip:
+            return round(float(clip.duration), 2)
+    except Exception as exc:  # noqa: BLE001 - a missing duration is not fatal
+        logger.warning(f"could not read duration of {path}: {exc}")
+        return None
+
+
+def _variant_of(video_path: str, narration: str, hook: str) -> dict:
+    """What treatment produced this reel, recorded at publish time.
+
+    Watch time two days later is unreadable without it: eight seconds watched is
+    superb on a 9-second reel and dismal on a 70-second one, and "which of these
+    changes helped" is unanswerable if nobody wrote down which ones were on.
+    """
+    from app.config import config
+
+    return {
+        "video_seconds": _video_seconds(video_path),
+        "script_chars": len(narration or ""),
+        "hook": (hook or "")[:80],
+        "script_style": str(config.app.get("script_style", "default")),
+        "subtitle_renderer": str(config.app.get("subtitle_renderer", "moviepy")),
+        "subtitle_cadence": str(config.app.get("subtitle_cadence", "punctuation")),
+        "voice": str(config.app.get("article_voice_name", "")).split(":")[-1][:40],
+    }
+
+
 def _publish(task_id: str, script, cluster: Optional[ArticleCluster] = None) -> dict:
     """Auto-publish or schedule a rendered Article Mode video."""
     try:
@@ -355,7 +386,10 @@ def _publish(task_id: str, script, cluster: Optional[ArticleCluster] = None) -> 
             narration = script.narration_text() if hasattr(script, "narration_text") else str(script)
             hook_text = reel_hook.generate_hook(subject, narration)
             video_for_post = reel_hook.add_hook(videos[0], hook_text)
-            result = postiz.schedule_video(video_for_post, caption)
+            result = postiz.schedule_video(
+                video_for_post, caption,
+                variant=_variant_of(video_for_post, narration, hook_text),
+            )
             result["provider"] = "postiz"
             return result
 

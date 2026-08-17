@@ -382,15 +382,23 @@ class PostizService:
     @classmethod
     def _record_publish(cls, kind: str, publish_at: datetime,
                         set_id: Optional[str] = None,
-                        post_id: Optional[str] = None) -> None:
+                        post_id: Optional[str] = None,
+                        variant: Optional[dict] = None) -> None:
         entries = cls._load_publish_log()
         # The quota day is the LOCAL day (see _local_date): `at` stays UTC so the
         # instant is unambiguous, `date` is the civil day the quota is about.
-        entries.append({"kind": kind, "date": _local_date(publish_at).isoformat(),
-                        "at": _utc_iso(publish_at),
-                        # set_id/post_id let collect-insights.sh attribute reach
-                        # back to the hashtag set that was used.
-                        "set_id": set_id, "post_id": post_id})
+        entry = {"kind": kind, "date": _local_date(publish_at).isoformat(),
+                 "at": _utc_iso(publish_at),
+                 # set_id/post_id let collect-insights.sh attribute reach
+                 # back to the hashtag set that was used.
+                 "set_id": set_id, "post_id": post_id}
+        if variant:
+            # What treatment produced this post — script length, hook, renderer
+            # flags, duration. Recorded at publish time because it cannot be
+            # reconstructed afterwards: config moves on, and the reel is just a
+            # file by the time the numbers arrive two days later.
+            entry["variant"] = variant
+        entries.append(entry)
         # 120 days is plenty for a daily quota and keeps the file small.
         cutoff = (_local_date(datetime.now(timezone.utc)) - timedelta(days=120)).isoformat()
         entries = [e for e in entries if str(e.get("date", "")) >= cutoff]
@@ -606,6 +614,7 @@ class PostizService:
         integration: Optional[dict] = None,
         kind: Optional[str] = None,
         set_id: Optional[str] = None,
+        variant: Optional[dict] = None,
     ) -> dict:
         caption = (caption or "").strip()
         if not caption:
@@ -687,7 +696,8 @@ class PostizService:
             return self._failure("Postiz create post response did not include postId")
         # Record against the per-type quota only once the post really exists.
         if kind:
-            self._record_publish(kind, publish_at, set_id=set_id, post_id=post_id)
+            self._record_publish(kind, publish_at, set_id=set_id, post_id=post_id,
+                                 variant=variant)
         logger.info(
             "Postiz post scheduled: "
             f"post_id={post_id}, integration_id={self.integration_id}, "
@@ -708,6 +718,7 @@ class PostizService:
         publish_at: Optional[datetime] = None,
         *,
         now: Optional[datetime] = None,
+        variant: Optional[dict] = None,
     ) -> dict:
         if not self.is_auto_schedule_configured():
             return self._failure("Postiz auto-scheduling is not configured")
@@ -736,6 +747,7 @@ class PostizService:
             publish_at,
             integration=integration["integration"],
             kind="reel",
+            variant=variant,
         )
         if not scheduled.get("success"):
             return scheduled
@@ -746,5 +758,6 @@ class PostizService:
 postiz_service = PostizService()
 
 
-def schedule_video(video_path: str, caption: str, publish_at: Optional[datetime] = None) -> dict:
-    return postiz_service.schedule_video(video_path, caption, publish_at)
+def schedule_video(video_path: str, caption: str, publish_at: Optional[datetime] = None,
+                   variant: Optional[dict] = None) -> dict:
+    return postiz_service.schedule_video(video_path, caption, publish_at, variant=variant)

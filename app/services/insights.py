@@ -18,6 +18,7 @@ import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import requests
 from loguru import logger
@@ -29,40 +30,78 @@ GRAPH = "https://graph.instagram.com/v21.0"
 # Give Instagram time to accumulate numbers; a post measured after an hour tells
 # you about posting time, not about the hashtags.
 MIN_AGE_HOURS = 48
+
 METRICS = "reach,likes,comments,saved,shares"
+
+# Reels are ranked on watch time and completion, and none of that was being
+# collected — so the selector has been tuning hashtag sets while blind to the
+# thing that actually drives reach. These two are Reels-only: asking for them on
+# a feed image returns an error for the WHOLE request, which is why the metric
+# set is chosen per media type rather than shared.
+REEL_METRICS = METRICS + ",ig_reels_avg_watch_time,ig_reels_video_view_total_time"
+
+RETENTION_METRICS = ("ig_reels_avg_watch_time", "ig_reels_video_view_total_time")
 
 
 def _norm(url: str) -> str:
     return (url or "").split("?")[0].rstrip("/").lower()
 
 
-def fetch_media(token: str, limit: int = 50) -> dict[str, str]:
-    """{normalised permalink: media_id} for recent media."""
+def metrics_for(product_type: str) -> str:
+    return REEL_METRICS if str(product_type or "").upper() == "REELS" else METRICS
+
+
+def fetch_media(token: str, limit: int = 50) -> dict[str, dict]:
+    """{normalised permalink: {id, product_type}} for recent media."""
     try:
         r = requests.get(f"{GRAPH}/me/media",
-                         params={"fields": "id,permalink,timestamp", "limit": limit,
-                                 "access_token": token}, timeout=30)
+                         params={"fields": "id,permalink,timestamp,media_product_type",
+                                 "limit": limit, "access_token": token}, timeout=30)
         r.raise_for_status()
         data = r.json().get("data", [])
     except (requests.exceptions.RequestException, ValueError) as exc:
         logger.error(f"could not list media: {exc}")
         return {}
-    return {_norm(m.get("permalink", "")): m["id"] for m in data if m.get("permalink")}
+    return {
+        _norm(m.get("permalink", "")): {
+            "id": m["id"],
+            "product_type": m.get("media_product_type", ""),
+        }
+        for m in data if m.get("permalink")
+    }
 
 
-def fetch_insights(token: str, media_id: str) -> dict:
+def _request_metrics(token: str, media_id: str, metric: str) -> Optional[list]:
     try:
         r = requests.get(f"{GRAPH}/{media_id}/insights",
-                         params={"metric": METRICS, "access_token": token}, timeout=30)
+                         params={"metric": metric, "access_token": token}, timeout=30)
         if r.status_code != 200:
             # Stories and some media types expose a different metric set; a
             # failure here is not fatal, it just means no sample for this post.
             logger.warning(f"insights unavailable for {media_id}: http {r.status_code}")
-            return {}
-        payload = r.json().get("data", [])
+            return None
+        return r.json().get("data", [])
     except (requests.exceptions.RequestException, ValueError) as exc:
         logger.warning(f"insights request failed for {media_id}: {exc}")
+        return None
+
+
+def fetch_insights(token: str, media_id: str, product_type: str = "") -> dict:
+    metric = metrics_for(product_type)
+    payload = _request_metrics(token, media_id, metric)
+
+    if payload is None and metric != METRICS:
+        # Meta renames and retires Reels metrics periodically. Losing the reach
+        # and saves we have collected all along because a watch-time metric went
+        # away would be a bad trade, so fall back to the base set.
+        logger.warning(
+            f"retrying {media_id} without retention metrics (the reel set was rejected)"
+        )
+        payload = _request_metrics(token, media_id, METRICS)
+
+    if payload is None:
         return {}
+
     out = {}
     for entry in payload:
         name = entry.get("name")
@@ -95,20 +134,27 @@ def collect(token: str, post_urls: dict[str, str]) -> dict:
             skipped_young += 1
             continue
 
-        media_id = permalinks.get(_norm(post_urls.get(post_id, "")))
-        if not media_id:
+        media = permalinks.get(_norm(post_urls.get(post_id, "")))
+        if not media:
             unmatched += 1
             continue
 
-        metrics = fetch_insights(token, media_id)
+        metrics = fetch_insights(token, media["id"], media.get("product_type", ""))
         if not metrics:
             continue
-        hashtags.record_sample(set_id, media_id, metrics)
+        # The variant recorded at publish time is what makes retention readable:
+        # watch time on its own says nothing without the script length and the
+        # treatment that produced it.
+        hashtags.record_sample(set_id, media["id"], metrics, variant=entry.get("variant"))
         collected += 1
-        logger.info(f"insights for set '{set_id}': {metrics}")
+        retention = {k: v for k, v in metrics.items() if k in RETENTION_METRICS}
+        logger.info(
+            f"insights for set '{set_id}': {metrics}"
+            + (f" (retention {retention})" if retention else " (no retention data)")
+        )
 
     return {"collected": collected, "too_young": skipped_young, "unmatched": unmatched,
-            "scores": hashtags.set_scores()}
+            "scores": hashtags.set_scores(), "retention": hashtags.retention_report()}
 
 
 def main() -> int:
