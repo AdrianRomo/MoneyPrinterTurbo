@@ -269,7 +269,7 @@ def _render_cluster(
         assessment, settings, mode, sensitive=bool(outcome.get("sensitive"))
     )
     if can_publish and repo.count_publications() < settings.max_publications_per_day:
-        publish_result = _publish(task_id, script)
+        publish_result = _publish(task_id, script, cluster)
         published = bool(publish_result.get("success"))
         if published:
             provider = publish_result.get("provider") or "publisher"
@@ -321,7 +321,7 @@ def _caption_for_script(script) -> str:
     return caption[:2200].strip()
 
 
-def _publish(task_id: str, script) -> dict:
+def _publish(task_id: str, script, cluster: Optional[ArticleCluster] = None) -> dict:
     """Auto-publish or schedule a rendered Article Mode video."""
     try:
         from app.services import state as sm
@@ -344,8 +344,16 @@ def _publish(task_id: str, script) -> dict:
             # untouched render on any failure, so this can never cost a post.
             from app.services import reel_hook
 
-            hook_text = reel_hook.generate_hook(
-                getattr(cluster, "title", "") or script[:80], script)
+            # The subject comes from the script, then the cluster. `script` is a
+            # GeneratedScript, not a string, and ArticleCluster has no `title` —
+            # reading either as one raised before schedule_video was ever called,
+            # which silently disabled auto-publish entirely (see runbook).
+            subject = (
+                str(getattr(script, "title", "") or "").strip()
+                or str(getattr(cluster, "normalized_title", "") or "").strip()
+            )
+            narration = script.narration_text() if hasattr(script, "narration_text") else str(script)
+            hook_text = reel_hook.generate_hook(subject, narration)
             video_for_post = reel_hook.add_hook(videos[0], hook_text)
             result = postiz.schedule_video(video_for_post, caption)
             result["provider"] = "postiz"
