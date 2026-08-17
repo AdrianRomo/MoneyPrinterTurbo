@@ -1275,6 +1275,39 @@ def mimo_tts(
     return None
 
 
+def _elevenlabs_setting(key: str, default: float) -> float:
+    raw = config.elevenlabs.get(key, default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning(f"elevenlabs {key}={raw!r} is not a number; using {default}")
+        return default
+    if not 0.0 <= value <= 1.0:
+        logger.warning(f"elevenlabs {key}={value} is outside 0.0-1.0; using {default}")
+        return default
+    return value
+
+
+def _elevenlabs_voice_settings() -> dict:
+    """Delivery, config-driven rather than hardcoded at 0.5/0.75/0.0.
+
+    Stability trades expressiveness for evenness. The default 0.5 gives a read
+    with performative swings in it, which is wrong for contemplative narration —
+    the voice should sound unhurried and the same from one reel to the next, so
+    the higher default here (0.7) buys consistency at the cost of drama nobody
+    asked for. Style above 0 amplifies the source voice's own mannerisms and
+    costs latency, so it stays off unless deliberately raised.
+    """
+    settings = {
+        "stability": _elevenlabs_setting("stability", 0.7),
+        "similarity_boost": _elevenlabs_setting("similarity_boost", 0.75),
+        "style": _elevenlabs_setting("style", 0.0),
+        "use_speaker_boost": bool(config.elevenlabs.get("use_speaker_boost", True)),
+    }
+    logger.debug(f"elevenlabs voice settings: {settings}")
+    return settings
+
+
 def elevenlabs_tts(
     text: str,
     voice_id: str,
@@ -1304,12 +1337,7 @@ def elevenlabs_tts(
     payload = {
         "text": text,
         "model_id": model_id,
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.75,
-            "style": 0.0,
-            "use_speaker_boost": True,
-        },
+        "voice_settings": _elevenlabs_voice_settings(),
     }
 
     # Errors where retrying will never help (auth/access/validation failures).

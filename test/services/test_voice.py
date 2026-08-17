@@ -1034,6 +1034,51 @@ class TestElevenLabsVoice(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestElevenLabsVoiceSettings(unittest.TestCase):
+    """Delivery is config-driven; the defaults suit contemplative narration."""
+
+    def setUp(self):
+        from app.config import config
+        self.config = config
+        self.original = dict(config.elevenlabs)
+
+    def tearDown(self):
+        self.config.elevenlabs.clear()
+        self.config.elevenlabs.update(self.original)
+
+    def test_defaults_favour_an_even_unhurried_read(self):
+        for key in ("stability", "similarity_boost", "style", "use_speaker_boost"):
+            self.config.elevenlabs.pop(key, None)
+        settings = vs._elevenlabs_voice_settings()
+        # Higher than ElevenLabs' 0.5: consistency over performance swings.
+        self.assertEqual(settings["stability"], 0.7)
+        self.assertEqual(settings["similarity_boost"], 0.75)
+        self.assertEqual(settings["style"], 0.0)
+        self.assertTrue(settings["use_speaker_boost"])
+
+    def test_settings_are_configurable(self):
+        self.config.elevenlabs.update(stability=0.35, similarity_boost=0.9, style=0.2)
+        settings = vs._elevenlabs_voice_settings()
+        self.assertEqual(settings["stability"], 0.35)
+        self.assertEqual(settings["similarity_boost"], 0.9)
+        self.assertEqual(settings["style"], 0.2)
+
+    def test_out_of_range_values_fall_back(self):
+        """越界值会被 API 拒绝，配置写错不该让整条配音链路失败。"""
+        self.config.elevenlabs.update(stability=7, style=-1)
+        settings = vs._elevenlabs_voice_settings()
+        self.assertEqual(settings["stability"], 0.7)
+        self.assertEqual(settings["style"], 0.0)
+
+    def test_unparseable_values_fall_back(self):
+        self.config.elevenlabs["stability"] = "very stable"
+        self.assertEqual(vs._elevenlabs_voice_settings()["stability"], 0.7)
+
+    def test_speaker_boost_can_be_turned_off(self):
+        self.config.elevenlabs["use_speaker_boost"] = False
+        self.assertFalse(vs._elevenlabs_voice_settings()["use_speaker_boost"])
+
+
 if __name__ == "__main__":
     # python -m unittest test.services.test_voice.TestVoiceService.test_azure_tts_v1
     # python -m unittest test.services.test_voice.TestVoiceService.test_azure_tts_v2
