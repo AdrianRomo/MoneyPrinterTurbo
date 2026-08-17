@@ -12,6 +12,7 @@ import math
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -1300,12 +1301,86 @@ def enqueue_review(
             "review_reasons": qc.get("review_reasons") or qc.get("issues") or [],
             "qc": qc,
             "assets": [asset.source_info for asset in assets],
+            "queued_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
     )
+    return _save_review_queue(queue)
+
+
+def _save_review_queue(queue: list[dict]) -> str:
     path = _review_queue_path()
     with open(path, "w", encoding="utf-8") as fp:
         json.dump(queue[-200:], fp, ensure_ascii=False, indent=2)
     return path
+
+
+def list_review() -> list[dict]:
+    """Everything waiting on a human, newest last."""
+    return _load_review_queue()
+
+
+def discard_review(task_id: str) -> bool:
+    """Drop an item from the queue. The rendered files are left for the pruner."""
+    queue = _load_review_queue()
+    remaining = [item for item in queue if item.get("task_id") != task_id]
+    if len(remaining) == len(queue):
+        return False
+    _save_review_queue(remaining)
+    logger.info(f"review: discarded {task_id}")
+    return True
+
+
+def approve_review(task_id: str, *, apply: bool = False) -> dict:
+    """Release a queued Reel, bypassing the gate that queued it.
+
+    This is the ONLY thing that bypasses `publishable`, and it does so because a
+    human said to — which is exactly what the queue is for. Everything else
+    still applies: Postiz must be configured and auto-scheduling on, quota and
+    windows are still chosen by select_publish_at, and the Reel series counter
+    still only advances on a real publish.
+
+    Defaults to a dry run. Publishing to a live brand account is not something
+    an approve command should do because an argument was omitted.
+    """
+    item = next((i for i in _load_review_queue() if i.get("task_id") == task_id), None)
+    if item is None:
+        return {"success": False, "error": f"{task_id} is not in the review queue"}
+    final_path = str(item.get("final_path") or "")
+    if not os.path.exists(final_path):
+        return {"success": False, "error": f"rendered file is gone: {final_path}"}
+    if not apply:
+        return {
+            "success": False,
+            "dry_run": True,
+            "task_id": task_id,
+            "would_publish": final_path,
+            "caption": item.get("caption"),
+            "review_reasons": item.get("review_reasons") or [],
+        }
+
+    from app.services import hashtags, postiz, series
+
+    qc = item.get("qc") or {}
+    part = series.reel_current()
+    caption = str(item.get("caption") or "")
+    variant = {
+        "kind": CONTENT_MODE,
+        "released_from_review": True,
+        "review_reasons": item.get("review_reasons") or [],
+        "video_seconds": qc.get("duration"),
+        "duration": qc.get("duration"),
+    }
+    result = postiz.schedule_video(final_path, _with_series_line(caption, part),
+                                   variant=variant)
+    result["provider"] = "postiz"
+    if result.get("success"):
+        series.reel_advance()
+        set_id = str((item.get("qc") or {}).get("hashtag_set") or "").strip()
+        if set_id:
+            hashtags.mark_used(set_id)
+        discard_review(task_id)
+        logger.success(f"review: released {task_id}")
+    return result
 
 
 def _write_artifact(task_id: str, payload: dict) -> str:
