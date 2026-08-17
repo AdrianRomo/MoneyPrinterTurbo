@@ -14,6 +14,7 @@ import random
 import re
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
@@ -38,6 +39,47 @@ def _cfg_int(key: str, default: int) -> int:
         return int(config.app.get(key, default))
     except (TypeError, ValueError):
         return default
+
+
+def _cfg_str(key: str, default: str) -> str:
+    value = config.app.get(key, default)
+    return str(value).strip() if value not in (None, "") else default
+
+
+def _local_tz():
+    """The account's civil timezone — the one its audience actually lives in.
+
+    Resolved on every call rather than cached in a module-level constant: a
+    constant freezes whatever config.toml said when the process started, which
+    is exactly how the subtitle styling silently went stale for two days.
+
+    Falls back to a fixed offset when tzdata is unavailable, so a missing
+    zoneinfo database degrades to the old behaviour instead of raising.
+    """
+    name = _cfg_str("content_timezone", "America/Mexico_City")
+    if name:
+        try:
+            return ZoneInfo(name)
+        except Exception as exc:  # bad name, or no tzdata in the image
+            logger.warning(f"content_timezone {name!r} unusable ({exc}); "
+                           "falling back to content_utc_offset_hours")
+    return timezone(timedelta(hours=_cfg_int("content_utc_offset_hours", -6)))
+
+
+def _local_date(value: datetime):
+    """The civil date a UTC instant falls on, locally.
+
+    Quota is a promise about a *day as the audience experiences it*. Counting
+    in UTC splits one local evening across two quota days: with an offset of
+    -6, anything after 18:00 local is already "tomorrow" in UTC, so the evening
+    slots silently drew from a fresh, empty quota.
+    """
+    return value.astimezone(_local_tz()).date()
+
+
+def _local_midnight_utc(on_date) -> datetime:
+    """00:00 local on `on_date`, expressed in UTC."""
+    return datetime.combine(on_date, time.min, tzinfo=_local_tz()).astimezone(timezone.utc)
 
 
 def _utc_iso(value: datetime) -> str:
@@ -342,13 +384,15 @@ class PostizService:
                         set_id: Optional[str] = None,
                         post_id: Optional[str] = None) -> None:
         entries = cls._load_publish_log()
-        entries.append({"kind": kind, "date": publish_at.astimezone(timezone.utc).date().isoformat(),
+        # The quota day is the LOCAL day (see _local_date): `at` stays UTC so the
+        # instant is unambiguous, `date` is the civil day the quota is about.
+        entries.append({"kind": kind, "date": _local_date(publish_at).isoformat(),
                         "at": _utc_iso(publish_at),
                         # set_id/post_id let collect-insights.sh attribute reach
                         # back to the hashtag set that was used.
                         "set_id": set_id, "post_id": post_id})
         # 120 days is plenty for a daily quota and keeps the file small.
-        cutoff = (datetime.now(timezone.utc).date() - timedelta(days=120)).isoformat()
+        cutoff = (_local_date(datetime.now(timezone.utc)) - timedelta(days=120)).isoformat()
         entries = [e for e in entries if str(e.get("date", "")) >= cutoff]
         try:
             with open(cls._publish_log_path(), "w", encoding="utf-8") as fh:
@@ -429,10 +473,12 @@ class PostizService:
         if not windows:
             return None
         start_h, end_h = windows[min(max(index, 0), len(windows) - 1)]
-        offset = self._utc_offset()
-        midnight = datetime.combine(on_date, time.min, tzinfo=timezone.utc)
-        start = midnight + timedelta(hours=start_h - offset)
-        end = midnight + timedelta(hours=end_h - offset)
+        # `on_date` is a LOCAL civil date; anchor to local midnight and add the
+        # window hours, so a tz with DST shifts the window with the clock rather
+        # than drifting an hour away from the audience.
+        midnight = _local_midnight_utc(on_date)
+        start = midnight + timedelta(hours=start_h)
+        end = midnight + timedelta(hours=end_h)
         # Draw only from the part of the window that is still far enough ahead.
         # Drawing across the whole window and rejecting a too-early pick throws
         # the entire day away on an unlucky draw — and the scheduler runs 15
@@ -487,18 +533,18 @@ class PostizService:
             # scheduled and counts everything already published today as zero.
             # The cap is a daily budget — what has gone out already is exactly
             # what it has to count.
-            window_start = datetime.combine(now.date(), time.min, tzinfo=timezone.utc)
+            window_start = _local_midnight_utc(_local_date(now))
             window_end = now + timedelta(days=_POST_LOOKAHEAD_DAYS)
             scheduled = self.list_posts(window_start, window_end)
             if not scheduled.get("success"):
                 return scheduled
             existing = self._posts_for_integration(scheduled["posts"])
             for day_offset in range(_POST_LOOKAHEAD_DAYS):
-                on_date = (now + timedelta(days=day_offset)).date()
+                on_date = _local_date(now + timedelta(days=day_offset))
                 used = self._count_kind_on(kind, on_date)
                 if type_quota is not None and used >= type_quota:
                     continue
-                if len([dt for dt in existing if dt.date() == on_date]) >= self.daily_post_cap:
+                if len([dt for dt in existing if _local_date(dt) == on_date]) >= self.daily_post_cap:
                     logger.info(
                         f"daily post cap ({self.daily_post_cap}) reached for {on_date}; "
                         "rolling to the next day"
@@ -523,24 +569,21 @@ class PostizService:
         existing = self._posts_for_integration(scheduled["posts"])
 
         for _ in range(_POST_LOOKAHEAD_DAYS):
-            same_day = [dt for dt in existing if dt.date() == candidate.date()]
+            candidate_day = _local_date(candidate)
+            same_day = [dt for dt in existing if _local_date(dt) == candidate_day]
             # Per-type quota, counted from our own ledger (see __init__).
-            if type_quota is not None and self._count_kind_on(kind, candidate.date()) >= type_quota:
+            if type_quota is not None and self._count_kind_on(kind, candidate_day) >= type_quota:
                 logger.info(
-                    f"{kind} quota ({type_quota}/day) reached for {candidate.date()}; "
+                    f"{kind} quota ({type_quota}/day) reached for {candidate_day}; "
                     "rolling to the next day"
                 )
-                candidate = datetime.combine(
-                    candidate.date() + timedelta(days=1),
-                    time.min,
-                    tzinfo=timezone.utc,
+                candidate = _local_midnight_utc(
+                    candidate_day + timedelta(days=1)
                 ) + timedelta(hours=self.schedule_interval_hours)
                 continue
             if len(same_day) >= self.daily_post_cap:
-                candidate = datetime.combine(
-                    candidate.date() + timedelta(days=1),
-                    time.min,
-                    tzinfo=timezone.utc,
+                candidate = _local_midnight_utc(
+                    candidate_day + timedelta(days=1)
                 ) + timedelta(hours=self.schedule_interval_hours)
                 continue
             latest_same_day = max(same_day, default=None)

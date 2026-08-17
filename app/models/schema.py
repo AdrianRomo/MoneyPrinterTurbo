@@ -37,6 +37,21 @@ def _subtitle_cfg(key: str, default):
     return default
 
 
+def _app_flag(key: str, default: bool) -> bool:
+    """Boolean render default, read from [app]/[ui] like _subtitle_cfg.
+
+    Same trap as the subtitle block: config.toml carried
+    match_materials_to_script = true while this was hardcoded False, so the
+    footage-matching fix was written down, believed, and never actually ran.
+    TOML gives a real bool, but a value edited through the UI can arrive as a
+    string, so coerce rather than trusting the type.
+    """
+    value = _subtitle_cfg(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
 class VideoConcatMode(str, Enum):
     random = "random"
     sequential = "sequential"
@@ -106,7 +121,7 @@ class VideoParams(BaseModel):
     video_transition_mode: Optional[VideoTransitionMode] = None
     video_clip_duration: Optional[int] = 5
     video_clip_speed: Optional[float] = 1.0
-    match_materials_to_script: bool = False
+    match_materials_to_script: bool = _app_flag("match_materials_to_script", False)
     video_count: Optional[int] = 1
 
     video_source: Optional[str] = "pexels"
@@ -239,7 +254,7 @@ class VideoTermsParams:
         "春天的花海，如诗如画般展现在眼前。万物复苏的季节里，大地披上了一袭绚丽多彩的盛装。金黄的迎春、粉嫩的樱花、洁白的梨花、艳丽的郁金香……"
     )
     amount: Optional[int] = 5
-    match_materials_to_script: bool = False
+    match_materials_to_script: bool = _app_flag("match_materials_to_script", False)
 
 
 class VideoSocialMetadataParams:

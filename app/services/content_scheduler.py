@@ -15,8 +15,10 @@ This module decides *whether*; postiz.py decides *when*. Quota is read before
 generating, so a double run is a no-op rather than a duplicate post, and no GPU
 time is spent on something that would only be deferred.
 
-Quota days are UTC, matching the ledger; windows are local via a fixed offset,
-so there is no tzdata dependency.
+Quota days and windows are both the account's LOCAL civil day (content_timezone,
+default America/Mexico_City). They used to disagree — quota in UTC, windows
+local — and at -6 the UTC day rolls over at 18:00 local, so every evening slot
+drew from a fresh, empty quota.
 
     python3 -m app.services.content_scheduler --dry-run
 """
@@ -31,7 +33,7 @@ from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 from app.config import config
-from app.services.postiz import PostizService
+from app.services.postiz import PostizService, _local_date
 
 # per_day is a target, not a licence to spend: the real ceiling is still
 # postiz_daily_quota_<kind>. The time of day comes from the publishing windows
@@ -73,7 +75,7 @@ def _days_since_last(kind: str) -> int:
         last_date = datetime.strptime(last, "%Y-%m-%d").date()
     except (ValueError, TypeError):
         return 10_000
-    return (datetime.now(timezone.utc).date() - last_date).days
+    return (_local_date(datetime.now(timezone.utc)) - last_date).days
 
 
 def due(kind: str, now_utc: datetime, svc: PostizService) -> tuple[bool, str]:
@@ -83,7 +85,9 @@ def due(kind: str, now_utc: datetime, svc: PostizService) -> tuple[bool, str]:
     a random time inside the format's window.
     """
     plan = PLAN[kind]
-    today = now_utc.date()
+    # The local civil day, not the UTC one: with a -6 offset the UTC day rolls
+    # over at 18:00 local, which handed every evening slot a fresh empty quota.
+    today = _local_date(now_utc)
     used = PostizService._count_kind_on(kind, today)
     if used >= min(plan["per_day"], svc.type_quotas.get(kind, 0)):
         return False, f"already published {used} today (target {plan['per_day']})"

@@ -10,7 +10,12 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from app.services.postiz import PostizService, redact_postiz_text
+from app.services.postiz import (
+    PostizService,
+    _local_date,
+    _local_midnight_utc,
+    redact_postiz_text,
+)
 
 
 _CONFIG_BASE = {
@@ -221,6 +226,44 @@ class TestPostizService(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertNotIn("postiz-secret-key", result["error"])
         self.assertNotIn("api_key=", result["error"])
+
+
+_TZ_CONFIG = dict(_CONFIG_BASE, content_timezone="America/Mexico_City")
+
+
+class LocalQuotaDayTest(unittest.TestCase):
+    """The quota day is the audience's civil day, not UTC.
+
+    Mexico City sits at -6, so the UTC day rolls over at 18:00 local. Counting
+    quota in UTC therefore handed every evening slot a fresh, empty quota and
+    split a single local day's posts across two ledger days.
+    """
+
+    @patch("app.services.postiz.config.app", _TZ_CONFIG)
+    def test_evening_and_morning_share_one_local_day(self):
+        morning = datetime(2026, 8, 16, 14, 7, tzinfo=timezone.utc)   # 08:07 local
+        evening = datetime(2026, 8, 17, 2, 5, tzinfo=timezone.utc)    # 20:05 local
+
+        # They differ in UTC — that is precisely the trap being closed.
+        self.assertNotEqual(morning.date(), evening.date())
+        self.assertEqual(_local_date(morning), _local_date(evening))
+
+    @patch("app.services.postiz.config.app", _TZ_CONFIG)
+    def test_local_midnight_maps_to_0600_utc(self):
+        midnight = _local_midnight_utc(_local_date(
+            datetime(2026, 8, 16, 14, 7, tzinfo=timezone.utc)))
+
+        self.assertEqual(midnight, datetime(2026, 8, 16, 6, 0, tzinfo=timezone.utc))
+
+    @patch("app.services.postiz.config.app",
+           dict(_CONFIG_BASE, content_timezone="Not/AZone",
+                content_utc_offset_hours=-6))
+    def test_unusable_timezone_falls_back_to_fixed_offset(self):
+        # A missing tzdata or a typo must degrade to the old behaviour rather
+        # than raising in the middle of a publish.
+        evening = datetime(2026, 8, 17, 2, 5, tzinfo=timezone.utc)
+
+        self.assertEqual(_local_date(evening), datetime(2026, 8, 16).date())
 
 
 if __name__ == "__main__":
