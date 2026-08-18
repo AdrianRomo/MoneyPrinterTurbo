@@ -400,6 +400,18 @@ def unload_comfyui_models() -> bool:
         return False
 
 
+class _VramContended(RuntimeError):
+    """The card was too full to start a video job, and we could not free it.
+
+    Distinct from a generation failure on purpose. Contention is a statement
+    about the *machine at this instant*, not about the clip: on 2026-08-18 two
+    slots were abandoned this way and the very next slot started 17 seconds
+    later with 18GB free, because the eviction had in fact worked and Ollama had
+    simply reloaded mid-measurement. Counting that as a failure paged the
+    operator for a run that produced 19 good clips and stopped cleanly.
+    """
+
+
 def _ensure_vram(need_mib: int, *, attempts: int = 3) -> bool:
     """Make room for a video job, or report that we could not.
 
@@ -860,7 +872,9 @@ def generate_clip(subject: str, variant: int = 0, *, engine: str = "",
     spec = ENGINES[engine]
 
     if not _ensure_vram(spec["vram_mib"]):
-        return None
+        raise _VramContended(
+            f"{spec['vram_mib']} MiB needed for {engine}; card too full"
+        )
 
     still = _seed_still(subject, variant)
     if not still:
@@ -1116,6 +1130,7 @@ def top_up(target: Optional[int] = None, *, deadline: Optional[float] = None,
     engine = engine or engine_name()
     made: list[str] = []
     failed = 0
+    contended = 0
     skipped_window = False
 
     try:
@@ -1123,16 +1138,17 @@ def top_up(target: Optional[int] = None, *, deadline: Optional[float] = None,
     except _PoolBusy as exc:
         logger.info(str(exc))
         status = pool_status()
-        status.update({"generated": 0, "failed": 0, "skipped_locked": True})
+        status.update({"generated": 0, "failed": 0, "contended": 0,
+                       "skipped_locked": True})
         return status
 
     with lock:
         _prepare_seeds(_planned_slots(), target=target, deadline=deadline)
-        made, failed, skipped_window = _fill(target, deadline, engine)
+        made, failed, contended, skipped_window = _fill(target, deadline, engine)
 
     status = pool_status()
     status.update({"generated": len(made), "failed": failed,
-                   "window_closed": skipped_window})
+                   "contended": contended, "window_closed": skipped_window})
     logger.info(f"pool top-up finished: {json.dumps(status)}")
     return status
 
@@ -1141,6 +1157,8 @@ def _fill(target: int, deadline: Optional[float], engine: str):
     """Generate missing clips until the target, the deadline, or repeated failure."""
     made: list[str] = []
     failed = 0
+    contended = 0
+    consecutive = 0
     skipped_window = False
 
     for subject, variant in _planned_slots():
@@ -1153,18 +1171,34 @@ def _fill(target: int, deadline: Optional[float], engine: str):
         dest = clip_path(subject, variant)
         if os.path.exists(dest) and os.path.getsize(dest) > 0:
             continue
-        path = generate_clip(subject, variant, engine=engine)
-        if path:
-            made.append(path)
-        else:
-            failed += 1
-            # A failure that is really VRAM contention will repeat for every
-            # remaining slot, so give up the window rather than burn it.
-            if failed >= 3:
-                logger.error("three consecutive clip failures; abandoning this window")
-                break
 
-    return made, failed, skipped_window
+        try:
+            path = generate_clip(subject, variant, engine=engine)
+        except _VramContended as exc:
+            # Not a failure: the machine was busy, not the clip bad. Kept out of
+            # `failed` so it cannot page the operator, but still counted so a
+            # night lost entirely to contention is visible in the status line.
+            logger.info(f"skipping {subject!r} for now: {exc}")
+            contended += 1
+            consecutive += 1
+            path = None
+        else:
+            if path:
+                made.append(path)
+                consecutive = 0
+            else:
+                failed += 1
+                consecutive += 1
+
+        # Trouble that is really about the machine repeats for every remaining
+        # slot, so give up the window rather than burn it. Counted CONSECUTIVELY
+        # and reset by any success: the earlier cumulative count would abandon a
+        # healthy 5-hour window over three unrelated blips hours apart.
+        if consecutive >= 3:
+            logger.error("three consecutive clip failures; abandoning this window")
+            break
+
+    return made, failed, contended, skipped_window
 
 
 # --- drawing from the pool (provider shape, mirroring brand_footage) ---------
@@ -1391,8 +1425,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         except _PoolBusy as exc:
             print(json.dumps({"skipped": True, "error": str(exc)}))
             return 0
-        with lock:
-            path = generate_clip(args.one, args.variant, engine=args.engine)
+        try:
+            with lock:
+                path = generate_clip(args.one, args.variant, engine=args.engine)
+        except _VramContended as exc:
+            print(json.dumps({"subject": args.one, "variant": args.variant,
+                              "skipped": True, "contended": True,
+                              "error": str(exc)}))
+            return 0
         print(json.dumps({"subject": args.one, "variant": args.variant, "path": path}))
         return 0 if path else 1
 
@@ -1411,6 +1451,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     # that skipped because another held the lock, and a run whose deadline closed
     # before it could start a ~9-minute clip. The pool being short is its steady
     # state for the first few nights — it is not an error.
+    #
+    # VRAM contention joined that list on 2026-08-18, when a run that generated
+    # 19 clips and stopped cleanly at its deadline still paged, because two slots
+    # had bounced off a card that Ollama was reloading. It is reported as
+    # `contended` in the status line and is visible in the log, but a busy GPU is
+    # a fact about the hour, not a fault to wake someone for.
     return 1 if status.get("failed") else 0
 
 

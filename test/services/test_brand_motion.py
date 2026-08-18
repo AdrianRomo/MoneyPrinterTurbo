@@ -333,3 +333,79 @@ class TestQuoteReelMotionSelection(MotionTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestContentionIsNotFailure(MotionTestCase):
+    """A busy card must not page the operator.
+
+    On 2026-08-18 a run generated 19 clips, stopped cleanly at its deadline, and
+    still exited 1 — because two slots had bounced off a GPU that Ollama was
+    reloading, and `_ensure_vram` gave up one round short. The eviction had
+    worked; the very next slot started 17 seconds later with 18GB free. The
+    distinction these tests protect is between "this clip is bad" (a failure,
+    worth waking someone) and "the machine is busy right now" (not).
+    """
+
+    def _fill_with(self, outcomes):
+        """Run _fill over exactly one slot per entry in `outcomes`.
+
+        The slot list is pinned rather than borrowed from `_planned_slots()`, so
+        the test measures the accounting and not the 92-slot production plan.
+        `target` is set out of reach because a contended or failed slot adds
+        nothing to the pool, and only the outcome list should end the loop.
+        """
+        slots = [(f"subject {i}", 0) for i in range(len(outcomes))]
+        calls = iter(outcomes)
+
+        def fake_generate(subject, variant, engine=""):
+            outcome = next(calls)
+            if isinstance(outcome, Exception):
+                raise outcome
+            if outcome is None:
+                return None
+            return self._place(subject, variant)
+
+        with patch.object(brand_motion, "_planned_slots", return_value=slots), \
+             patch.object(brand_motion, "generate_clip", side_effect=fake_generate):
+            return brand_motion._fill(
+                target=len(outcomes) + 1, deadline=None, engine="wan"
+            )
+
+    def test_contention_is_counted_apart_from_failure(self):
+        made, failed, contended, _ = self._fill_with(
+            [brand_motion._VramContended("card too full"), "ok"]
+        )
+        self.assertEqual(failed, 0, "contention must not count as a failure")
+        self.assertEqual(contended, 1)
+        self.assertEqual(len(made), 1)
+
+    def test_top_up_does_not_report_failure_for_a_contended_run(self):
+        """The exit code reads `failed`, so this is the bit that pages."""
+        with patch.object(brand_motion, "_fill", return_value=([], 0, 2, True)), \
+             patch.object(brand_motion, "_prepare_seeds", return_value=0):
+            status = brand_motion.top_up(target=1, deadline=None, engine="wan")
+        self.assertFalse(status.get("failed"))
+        self.assertEqual(status.get("contended"), 2)
+
+    def test_a_success_resets_the_consecutive_trouble_counter(self):
+        """Three blips spread across a healthy night must not abandon it.
+
+        The counter used to be cumulative despite the log line calling it
+        consecutive, so three unrelated hiccups hours apart would end a window
+        that was otherwise producing clips.
+        """
+        made, failed, contended, _ = self._fill_with(
+            [None, "ok", None, "ok", None, "ok"]
+        )
+        self.assertEqual(len(made), 3, "run should not have been abandoned")
+        self.assertEqual(failed, 3)
+        self.assertEqual(contended, 0)
+
+    def test_three_consecutive_troubles_still_abandon_the_window(self):
+        """The guard that stops a dead GPU burning five hours must survive."""
+        made, failed, contended, _ = self._fill_with(
+            [brand_motion._VramContended("full")] * 3 + ["ok"] * 5
+        )
+        self.assertEqual(len(made), 0)
+        self.assertEqual(contended, 3)
+        self.assertEqual(failed, 0)
