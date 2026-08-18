@@ -760,7 +760,7 @@ def _seed_workflow(subject: str, seed: int) -> dict:
         "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ckpt}},
         "6": {"class_type": "CLIPTextEncode", "inputs": {"text": positive, "clip": ["4", 1]}},
         "7": {"class_type": "CLIPTextEncode",
-              "inputs": {"text": verse_card.NEGATIVE_PROMPT, "clip": ["4", 1]}},
+              "inputs": {"text": verse_card.negative_prompt(), "clip": ["4", 1]}},
         "5": {"class_type": "EmptyLatentImage",
               "inputs": {"width": base_w, "height": base_h, "batch_size": 1}},
         "3": {"class_type": "KSampler",
@@ -962,7 +962,7 @@ def _subject_vocabulary(*, moving_only: bool = False) -> list[str]:
     `moving_only` narrows to subjects containing something that moves by itself,
     which is what the pool fills. See _MOVING_KEYWORDS for why.
     """
-    subjects = list(verse_card.BACKGROUND_SUBJECTS)
+    subjects = list(verse_card.background_subjects())
     for mood in brand_footage.MOODS.values():
         for subject in mood["subjects"]:
             if subject not in subjects:

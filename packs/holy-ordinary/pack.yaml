@@ -1,0 +1,1327 @@
+# holy-ordinary — the pack for @faith.intheordinary.
+#
+# GENERATED from the module constants when packs were introduced, so the
+# first pack is provably identical to the behaviour that was already
+# shipping. Edit freely from here; see app/services/pack.py for what does
+# and does not belong in a pack (safety gates stay in code).
+#
+# Every key is OPTIONAL. Delete one and the module default applies.
+
+meta:
+  name: holy-ordinary
+  account: faith.intheordinary
+  description: Devotional scripture cards, nature carousels and quiet quote Reels. Muted, unpeopled, public-domain
+    scripture.
+  language: English
+brand:
+  wordmark: holy ordinary
+  tagline:
+  - creation
+  - × wonder
+verse_card:
+  background_subjects:
+  - soft morning mist over a quiet meadow at sunrise
+  - golden hour light through tall forest pines
+  - calm lake at dawn with gentle reflections
+  - rolling hills under a wide pastel sky
+  - sunlight breaking through low clouds over open fields
+  - gentle ocean waves on an empty shore at first light
+  - dew on wild grass in early morning light
+  - quiet mountain range under soft blue haze
+  - wheat field swaying in warm evening light
+  - still river winding through autumn woodland
+  - desert dunes under a soft dawn sky
+  - snowfall over silent evergreen trees
+  - rain on a window with soft daylight behind
+  - a narrow country path between hedgerows at dusk
+  - olive trees on a hillside in warm afternoon light
+  - low tide on a wide empty beach under pale sky
+  - morning fog rolling through a shallow valley
+  - wildflowers in a field under an overcast sky
+  - sunlight through cathedral of tall birch trees
+  - a calm harbour at first light, no boats moving
+  - frost on bare branches in blue morning light
+  - clouds building over a wide open plain
+  - a mountain stream over smooth stones
+  - tall grass bending in coastal wind
+  - an empty wooden bench beside still water
+  - warm lamplight through a rain-streaked window
+  - sun setting behind distant rolling hills
+  - a quiet forest floor covered in fallen leaves
+  - moonlight over a calm sea
+  - first snow settling on a quiet field
+  style_suffix: photographic, natural light, shallow depth of field, muted warm tones, cinematic, serene,
+    minimal composition, negative space, 35mm, high detail
+  negative_prompt: people, person, human, face, portrait, jesus, christ, saint, angel, figure, crowd,
+    hands, text, watermark, signature, logo, letters, words, caption, cross, crucifix, church interior,
+    statue, lowres, blurry, jpeg artifacts, oversaturated, hdr, deformed, cartoon, 3d render
+carousel:
+  cover_variants:
+  - THE CREATIVITY OF GOD IN {noun}
+  - '{count} PLACES THAT LOOK PAINTED'
+  - DID GOD OVERDO IT WITH {noun}?
+  - '{noun}, AND NOTHING WE MADE'
+  - '{count} THINGS NOBODY DESIGNED'
+  - YOU HAVE NEVER SEEN {noun} LIKE THIS
+  place_only_variants:
+  - 1
+  questions:
+  - Which one would you stand in?
+  - Which slide made you stop?
+  - Save this for the day you need it — which one?
+  - Where would you take this in?
+  - Tag someone who needs to see slide 3.
+  caption_leads:
+  - The creativity of God in {noun}
+  - '{noun}, and what they say about the One who made them'
+  - A closer look at {noun}
+  - Photographs of {noun}, and a reason to slow down
+  - What {noun} are still doing without an audience
+  caption_bodies:
+  - Creation keeps saying something we did not invent. Swipe through and let it slow you down for a minute.
+  - None of this was made to be photographed. It was here first, and it will be here after the scroll.
+  - Swipe slowly. There is no hurry in any of these.
+  - Every one of these is a real place, photographed by someone who went there.
+  - Worth looking at for longer than an algorithm expects you to.
+  save_asks:
+  - Save this set for a day that needs slowing down.
+  - Save it — and send it to whoever would stand there with you.
+  - Keep this one. Share it if it is not just for you.
+  cta_lines:
+  - keep this one
+  - for a slower morning
+  cta_micro: SAVE  ·  SHARE  ·  FOLLOW
+  subjects:
+    mountains:
+      noun: MOUNTAINS
+      query: mountain landscape peak
+      pool: null
+      label_locations: true
+    auroras:
+      noun: THE AURORAS
+      query: aurora borealis
+      pool: null
+      label_locations: true
+    sunsets:
+      noun: THE SUNSET
+      query: sunset clouds sky
+      pool: null
+      label_locations: true
+    oceans:
+      noun: THE OCEAN
+      query: ocean coast sea waves
+      pool: null
+      label_locations: true
+    forests:
+      noun: THE FORESTS
+      query: (forest OR woodland OR forêt)
+      pool: null
+      label_locations: true
+    deserts:
+      noun: THE DESERT
+      query: (desert OR dune OR dunes)
+      pool: null
+      label_locations: true
+    rivers:
+      noun: THE RIVERS
+      query: river valley
+      pool: null
+      label_locations: true
+    storms:
+      noun: THE STORM
+      query: (storm OR lightning OR thunderstorm)
+      pool: null
+      label_locations: true
+    glaciers:
+      noun: THE ICE
+      query: (glacier OR iceberg OR glaciar)
+      pool: null
+      label_locations: true
+    night_sky:
+      noun: THE NIGHT SKY
+      query: (starry OR astrophotography)
+      pool: null
+      label_locations: true
+    waterfalls:
+      noun: WATERFALLS
+      query: waterfall cascade
+      pool: null
+      label_locations: true
+    canyons:
+      noun: CANYONS
+      query: canyon gorge cliffs
+      pool: null
+      label_locations: true
+    volcanoes:
+      noun: VOLCANOES
+      query: (volcano OR volcanic OR eruption OR volcan)
+      pool: null
+      label_locations: true
+    lakes:
+      noun: LAKES
+      query: (lake OR lagoon OR lago)
+      pool: null
+      label_locations: true
+    islands:
+      noun: ISLANDS
+      query: (island OR archipelago OR isla)
+      pool: null
+      label_locations: true
+    caves:
+      noun: CAVES
+      query: (cave OR cavern OR grotto OR cueva)
+      pool: null
+      label_locations: true
+    autumn:
+      noun: AUTUMN
+      query: autumn foliage forest
+      pool: null
+      label_locations: true
+    winter:
+      noun: WINTER
+      query: snow winter landscape
+      pool: null
+      label_locations: true
+    wildflowers:
+      noun: WILDFLOWERS
+      query: (wildflower OR wildflowers OR meadow OR blossom)
+      pool: null
+      label_locations: true
+    fjords:
+      noun: THE FJORDS
+      query: fjord landscape
+      pool: null
+      label_locations: true
+    rainforest:
+      noun: THE RAINFOREST
+      query: (rainforest OR jungle OR canopy)
+      pool: null
+      label_locations: true
+    clouds:
+      noun: THE CLOUDS
+      query: clouds sky formation
+      pool: null
+      label_locations: true
+    mist:
+      noun: THE MIST
+      query: fog mist landscape morning
+      pool: null
+      label_locations: true
+    savanna:
+      noun: THE SAVANNA
+      query: savanna grassland plain
+      pool: null
+      label_locations: true
+    hot_springs:
+      noun: HOT SPRINGS
+      query: (geyser OR thermal OR hotspring)
+      pool: null
+      label_locations: true
+    salt_flats:
+      noun: SALT FLATS
+      query: (salar OR saline OR salt)
+      pool: null
+      label_locations: true
+    rain:
+      noun: THE RAIN
+      query: (rain OR raindrops OR rainy)
+      pool: null
+      label_locations: true
+    tundra:
+      noun: THE TUNDRA
+      query: (tundra OR permafrost OR arctic)
+      pool: null
+      label_locations: true
+    ancient_trees:
+      noun: ANCIENT TREES
+      query: (oak OR baobab OR sequoia OR adansonia OR quercus)
+      pool: null
+      label_locations: true
+    birds:
+      noun: BIRDS IN FLIGHT
+      query: (bird OR birds OR aves)
+      pool: null
+      label_locations: false
+    whales:
+      noun: THE WHALES
+      query: (whale OR humpback OR orca OR megaptera OR balaenoptera)
+      pool: null
+      label_locations: false
+    butterflies:
+      noun: BUTTERFLIES
+      query: butterfly wings
+      pool: null
+      label_locations: false
+    owls:
+      noun: THE OWLS
+      query: (owl OR owls OR strix OR bubo OR tyto)
+      pool: null
+      label_locations: false
+    foxes:
+      noun: THE FOXES
+      query: fox wildlife
+      pool: null
+      label_locations: false
+    deer:
+      noun: THE DEER
+      query: deer forest wildlife
+      pool: null
+      label_locations: false
+    penguins:
+      noun: THE PENGUINS
+      query: (penguin OR penguins OR pygoscelis OR spheniscus)
+      pool: null
+      label_locations: false
+    jellyfish:
+      noun: JELLYFISH
+      query: (jellyfish OR chrysaora OR aurelia OR cyanea OR rhizostoma)
+      pool: null
+      label_locations: false
+    reefs:
+      noun: CORAL REEFS
+      query: coral reef underwater fish
+      pool: null
+      label_locations: false
+    big_cats:
+      noun: THE GREAT CATS
+      query: (leopard OR tiger OR lion OR jaguar OR cheetah OR panthera)
+      pool: null
+      label_locations: false
+    elephants:
+      noun: THE ELEPHANTS
+      query: (elephant OR elephants OR loxodonta OR elephas)
+      pool: null
+      label_locations: false
+    horses:
+      noun: THE HORSES
+      query: (horse OR horses OR stallion OR equus)
+      pool: null
+      label_locations: false
+    wolves:
+      noun: THE WOLVES
+      query: (wolf OR wolves)
+      pool: null
+      label_locations: false
+    hummingbirds:
+      noun: HUMMINGBIRDS
+      query: (hummingbird OR hummingbirds OR trochilidae OR colibri)
+      pool: null
+      label_locations: false
+    sea_turtles:
+      noun: SEA TURTLES
+      query: sea turtle underwater
+      pool: null
+      label_locations: false
+    dragonflies:
+      noun: DRAGONFLIES
+      query: (dragonfly OR dragonflies OR damselfly OR odonata OR libellula)
+      pool: null
+      label_locations: false
+    galaxies:
+      noun: THE GALAXIES
+      query: (galaxy OR galaxies)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    nebulae:
+      noun: THE NEBULAE
+      query: nebula
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    the_moon:
+      noun: THE MOON
+      query: (moon OR lunar)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    planets:
+      noun: THE PLANETS
+      query: (saturn OR jupiter OR neptune OR planet)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    star_clusters:
+      noun: THE STARS
+      query: (cluster OR globular OR pleiades)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    eclipses:
+      noun: THE ECLIPSE
+      query: (eclipse OR totality OR annular)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    snowflakes:
+      noun: SNOWFLAKES
+      query: (snowflake OR snowflakes)
+      pool: null
+      label_locations: false
+    frost:
+      noun: THE FROST
+      query: (frost OR hoarfrost OR rime)
+      pool: null
+      label_locations: false
+    dew:
+      noun: THE DEW
+      query: (dew OR dewdrop OR dewdrops)
+      pool: null
+      label_locations: false
+    water_drops:
+      noun: WATER DROPS
+      query: (droplet OR droplets OR waterdrop)
+      pool: null
+      label_locations: false
+    soap_bubbles:
+      noun: BUBBLES
+      query: (bubble OR bubbles)
+      pool: null
+      label_locations: false
+    spider_webs:
+      noun: SPIDER WEBS
+      query: (cobweb OR spiderweb OR web)
+      pool: null
+      label_locations: false
+    feathers:
+      noun: FEATHERS
+      query: (feather OR feathers OR plumage)
+      pool: null
+      label_locations: false
+    seashells:
+      noun: SEASHELLS
+      query: (seashell OR shell OR conch)
+      pool: null
+      label_locations: false
+    crystals:
+      noun: CRYSTALS
+      query: (crystal OR crystals OR quartz)
+      pool: null
+      label_locations: false
+    minerals:
+      noun: THE MINERALS
+      query: (mineral OR minerals OR malachite)
+      pool: null
+      label_locations: false
+    geodes:
+      noun: GEODES
+      query: (geode OR agate OR amethyst)
+      pool: null
+      label_locations: false
+    amber:
+      noun: AMBER
+      query: (amber OR resin)
+      pool: null
+      label_locations: false
+    leaf_veins:
+      noun: THE LEAF
+      query: (leaf OR leaves OR foliage)
+      pool: null
+      label_locations: false
+    tree_rings:
+      noun: TREE RINGS
+      query: (dendrochronology OR treering OR trunk)
+      pool: null
+      label_locations: false
+    honeycomb:
+      noun: THE HONEYCOMB
+      query: (honeycomb OR beehive OR honeybee)
+      pool: null
+      label_locations: false
+    moss:
+      noun: THE MOSS
+      query: (moss OR mosses OR bryophyte)
+      pool: null
+      label_locations: false
+    lichen:
+      noun: THE LICHEN
+      query: (lichen OR lichens)
+      pool: null
+      label_locations: false
+    fungi:
+      noun: THE FUNGI
+      query: (mushroom OR fungus OR fungi)
+      pool: null
+      label_locations: false
+    seeds:
+      noun: SEEDS
+      query: (seed OR seeds OR dandelion)
+      pool: null
+      label_locations: false
+    ice_crystals:
+      noun: ICE
+      query: (icicle OR icicles OR ice)
+      pool: null
+      label_locations: false
+    pebbles:
+      noun: THE STONES
+      query: (pebble OR pebbles OR shingle)
+      pool: null
+      label_locations: false
+    bark:
+      noun: THE BARK
+      query: (bark OR trunk)
+      pool: null
+      label_locations: false
+    orchids:
+      noun: THE ORCHIDS
+      query: (orchid OR orchids OR orchidaceae)
+      pool: null
+      label_locations: false
+    lotus:
+      noun: THE LOTUS
+      query: (lotus OR nelumbo OR waterlily)
+      pool: null
+      label_locations: false
+    cacti:
+      noun: THE CACTI
+      query: (cactus OR cacti OR saguaro)
+      pool: null
+      label_locations: false
+    succulents:
+      noun: SUCCULENTS
+      query: (succulent OR succulents OR aloe)
+      pool: null
+      label_locations: false
+    ferns:
+      noun: THE FERNS
+      query: (fern OR ferns OR frond)
+      pool: null
+      label_locations: false
+    redwoods:
+      noun: THE REDWOODS
+      query: (redwood OR sequoia OR sequoiadendron)
+      pool: null
+      label_locations: true
+    palms:
+      noun: THE PALMS
+      query: (palm OR palms OR palmera)
+      pool: null
+      label_locations: true
+    cherry_blossom:
+      noun: THE BLOSSOM
+      query: (sakura OR cherry OR blossom)
+      pool: null
+      label_locations: true
+    lavender:
+      noun: LAVENDER
+      query: (lavender OR lavandula)
+      pool: null
+      label_locations: true
+    poppies:
+      noun: THE POPPIES
+      query: (poppy OR poppies OR papaver)
+      pool: null
+      label_locations: true
+    bluebells:
+      noun: BLUEBELLS
+      query: (bluebell OR bluebells OR hyacinthoides)
+      pool: null
+      label_locations: true
+    sunflowers:
+      noun: SUNFLOWERS
+      query: (sunflower OR sunflowers OR helianthus)
+      pool: null
+      label_locations: true
+    wisteria:
+      noun: WISTERIA
+      query: (wisteria OR glycine)
+      pool: null
+      label_locations: false
+    bamboo:
+      noun: THE BAMBOO
+      query: (bamboo OR bambusa)
+      pool: null
+      label_locations: true
+    kelp:
+      noun: THE KELP
+      query: (kelp OR seaweed OR algae)
+      pool: null
+      label_locations: false
+    tulips:
+      noun: THE TULIPS
+      query: (tulip OR tulips OR tulipa)
+      pool: null
+      label_locations: true
+    roses:
+      noun: THE ROSES
+      query: (rose OR roses OR rosa)
+      pool: null
+      label_locations: false
+    water_lilies:
+      noun: WATER LILIES
+      query: (waterlily OR nymphaea OR lily)
+      pool: null
+      label_locations: false
+    heather:
+      noun: THE HEATHER
+      query: (heather OR calluna OR heath)
+      pool: null
+      label_locations: true
+    rice_terraces:
+      noun: THE TERRACES
+      query: (terrace OR terraces OR paddy)
+      pool: null
+      label_locations: true
+    vineyards:
+      noun: THE VINEYARDS
+      query: (vineyard OR vineyards OR vine)
+      pool: null
+      label_locations: true
+    olive_groves:
+      noun: THE OLIVE TREES
+      query: (olive OR olea)
+      pool: null
+      label_locations: true
+    tea_fields:
+      noun: THE TEA FIELDS
+      query: (tea OR camellia OR plantation)
+      pool: null
+      label_locations: true
+    flamingos:
+      noun: THE FLAMINGOS
+      query: (flamingo OR flamingos OR phoenicopterus)
+      pool: null
+      label_locations: false
+    herons:
+      noun: THE HERONS
+      query: (heron OR herons OR ardea)
+      pool: null
+      label_locations: false
+    cranes:
+      noun: THE CRANES
+      query: (crane OR cranes OR grus)
+      pool: null
+      label_locations: false
+    eagles:
+      noun: THE EAGLES
+      query: (eagle OR eagles OR aquila OR haliaeetus)
+      pool: null
+      label_locations: false
+    kingfishers:
+      noun: KINGFISHERS
+      query: (kingfisher OR alcedo)
+      pool: null
+      label_locations: false
+    puffins:
+      noun: THE PUFFINS
+      query: (puffin OR puffins OR fratercula)
+      pool: null
+      label_locations: false
+    peacocks:
+      noun: THE PEACOCKS
+      query: (peacock OR peafowl OR pavo)
+      pool: null
+      label_locations: false
+    parrots:
+      noun: THE PARROTS
+      query: (parrot OR parrots OR macaw OR ara)
+      pool: null
+      label_locations: false
+    swans:
+      noun: THE SWANS
+      query: (swan OR swans OR cygnus)
+      pool: null
+      label_locations: false
+    pelicans:
+      noun: THE PELICANS
+      query: (pelican OR pelicans OR pelecanus)
+      pool: null
+      label_locations: false
+    storks:
+      noun: THE STORKS
+      query: (stork OR storks OR ciconia)
+      pool: null
+      label_locations: false
+    toucans:
+      noun: THE TOUCANS
+      query: (toucan OR ramphastos)
+      pool: null
+      label_locations: false
+    woodpeckers:
+      noun: WOODPECKERS
+      query: (woodpecker OR picus OR dendrocopos)
+      pool: null
+      label_locations: false
+    ravens:
+      noun: THE RAVENS
+      query: (raven OR crow OR corvus)
+      pool: null
+      label_locations: false
+    bees:
+      noun: THE BEES
+      query: (bee OR bees OR bombus OR apis)
+      pool: null
+      label_locations: false
+    beetles:
+      noun: THE BEETLES
+      query: (beetle OR beetles OR coleoptera)
+      pool: null
+      label_locations: false
+    ladybirds:
+      noun: LADYBIRDS
+      query: (ladybird OR ladybug OR coccinella)
+      pool: null
+      label_locations: false
+    moths:
+      noun: THE MOTHS
+      query: (moth OR moths OR sphingidae)
+      pool: null
+      label_locations: false
+    ants:
+      noun: THE ANTS
+      query: (ant OR ants OR formica)
+      pool: null
+      label_locations: false
+    mantises:
+      noun: THE MANTIS
+      query: (mantis OR mantid)
+      pool: null
+      label_locations: false
+    spiders:
+      noun: THE SPIDERS
+      query: (spider OR spiders OR araneae)
+      pool: null
+      label_locations: false
+    snails:
+      noun: THE SNAILS
+      query: (snail OR snails OR helix)
+      pool: null
+      label_locations: false
+    frogs:
+      noun: THE FROGS
+      query: (frog OR frogs OR rana OR hyla)
+      pool: null
+      label_locations: false
+    chameleons:
+      noun: CHAMELEONS
+      query: (chameleon OR chamaeleo)
+      pool: null
+      label_locations: false
+    geckos:
+      noun: THE GECKOS
+      query: (gecko OR geckos)
+      pool: null
+      label_locations: false
+    iguanas:
+      noun: THE IGUANAS
+      query: (iguana OR iguanas)
+      pool: null
+      label_locations: false
+    snakes:
+      noun: THE SERPENTS
+      query: (snake OR snakes OR serpent)
+      pool: null
+      label_locations: false
+    crocodiles:
+      noun: CROCODILES
+      query: (crocodile OR alligator OR crocodylus)
+      pool: null
+      label_locations: false
+    dolphins:
+      noun: THE DOLPHINS
+      query: (dolphin OR dolphins OR delphinus)
+      pool: null
+      label_locations: false
+    sharks:
+      noun: THE SHARKS
+      query: (shark OR sharks OR carcharhinus)
+      pool: null
+      label_locations: false
+    rays:
+      noun: THE RAYS
+      query: (stingray OR manta OR ray)
+      pool: null
+      label_locations: false
+    seahorses:
+      noun: SEAHORSES
+      query: (seahorse OR hippocampus)
+      pool: null
+      label_locations: false
+    octopus:
+      noun: THE OCTOPUS
+      query: (octopus OR cuttlefish OR squid)
+      pool: null
+      label_locations: false
+    starfish:
+      noun: THE STARFISH
+      query: (starfish OR seastar OR asteroidea)
+      pool: null
+      label_locations: false
+    crabs:
+      noun: THE CRABS
+      query: (crab OR crabs OR brachyura)
+      pool: null
+      label_locations: false
+    nudibranchs:
+      noun: SEA SLUGS
+      query: (nudibranch OR nudibranchs)
+      pool: null
+      label_locations: false
+    otters:
+      noun: THE OTTERS
+      query: (otter OR otters OR lutra)
+      pool: null
+      label_locations: false
+    seals:
+      noun: THE SEALS
+      query: (seal OR seals OR pinniped)
+      pool: null
+      label_locations: false
+    bears:
+      noun: THE BEARS
+      query: (bear OR bears OR ursus)
+      pool: null
+      label_locations: false
+    pandas:
+      noun: THE PANDAS
+      query: (panda OR ailuropoda)
+      pool: null
+      label_locations: false
+    monkeys:
+      noun: THE MONKEYS
+      query: (monkey OR macaque OR primate)
+      pool: null
+      label_locations: false
+    lemurs:
+      noun: THE LEMURS
+      query: (lemur OR lemurs OR lemuridae)
+      pool: null
+      label_locations: false
+    sloths:
+      noun: THE SLOTHS
+      query: (sloth OR bradypus)
+      pool: null
+      label_locations: false
+    koalas:
+      noun: THE KOALAS
+      query: (koala OR phascolarctos)
+      pool: null
+      label_locations: false
+    kangaroos:
+      noun: KANGAROOS
+      query: (kangaroo OR wallaby OR macropus)
+      pool: null
+      label_locations: false
+    giraffes:
+      noun: THE GIRAFFES
+      query: (giraffe OR giraffa)
+      pool: null
+      label_locations: false
+    zebras:
+      noun: THE ZEBRAS
+      query: (zebra OR zebras OR equus)
+      pool: null
+      label_locations: false
+    rhinos:
+      noun: THE RHINOS
+      query: (rhinoceros OR rhino OR ceratotherium)
+      pool: null
+      label_locations: false
+    hippos:
+      noun: THE HIPPOS
+      query: (hippopotamus OR hippo)
+      pool: null
+      label_locations: false
+    bison:
+      noun: THE BISON
+      query: (bison OR buffalo)
+      pool: null
+      label_locations: false
+    camels:
+      noun: THE CAMELS
+      query: (camel OR camels OR camelus)
+      pool: null
+      label_locations: false
+    ibex:
+      noun: THE IBEX
+      query: (ibex OR capra OR chamois)
+      pool: null
+      label_locations: false
+    squirrels:
+      noun: SQUIRRELS
+      query: (squirrel OR sciurus)
+      pool: null
+      label_locations: false
+    hedgehogs:
+      noun: HEDGEHOGS
+      query: (hedgehog OR erinaceus)
+      pool: null
+      label_locations: false
+    hares:
+      noun: THE HARES
+      query: (hare OR rabbit OR lepus)
+      pool: null
+      label_locations: false
+    lynx:
+      noun: THE LYNX
+      query: (lynx OR bobcat)
+      pool: null
+      label_locations: false
+    moose:
+      noun: THE MOOSE
+      query: (moose OR elk OR alces)
+      pool: null
+      label_locations: false
+    reindeer:
+      noun: THE REINDEER
+      query: (reindeer OR caribou OR rangifer)
+      pool: null
+      label_locations: false
+    bats:
+      noun: THE BATS
+      query: (bat OR bats OR chiroptera)
+      pool: null
+      label_locations: false
+    salmon:
+      noun: THE SALMON
+      query: (salmon OR salmo OR trout)
+      pool: null
+      label_locations: false
+    rainbows:
+      noun: THE RAINBOW
+      query: (rainbow OR rainbows)
+      pool: null
+      label_locations: true
+    sunbeams:
+      noun: THE LIGHT
+      query: (crepuscular OR sunbeam OR sunrays)
+      pool: null
+      label_locations: true
+    mammatus:
+      noun: THE SKY
+      query: (mammatus OR undulatus)
+      pool: null
+      label_locations: true
+    noctilucent:
+      noun: NIGHT CLOUDS
+      query: (noctilucent OR polar)
+      pool: null
+      label_locations: true
+    sandstorms:
+      noun: THE SANDSTORM
+      query: (sandstorm OR haboob OR dust)
+      pool: null
+      label_locations: true
+    sea_stacks:
+      noun: SEA STACKS
+      query: (stack OR stacks OR seastack)
+      pool: null
+      label_locations: true
+    arches:
+      noun: THE ARCHES
+      query: (arch OR arches OR natural)
+      pool: null
+      label_locations: true
+    hoodoos:
+      noun: THE HOODOOS
+      query: (hoodoo OR hoodoos OR pinnacle)
+      pool: null
+      label_locations: true
+    karst:
+      noun: THE KARST
+      query: (karst OR limestone)
+      pool: null
+      label_locations: true
+    badlands:
+      noun: THE BADLANDS
+      query: (badlands OR badland)
+      pool: null
+      label_locations: true
+    mangroves:
+      noun: THE MANGROVES
+      query: (mangrove OR mangroves OR rhizophora)
+      pool: null
+      label_locations: true
+    wetlands:
+      noun: THE WETLANDS
+      query: (wetland OR marsh OR swamp)
+      pool: null
+      label_locations: true
+    deltas:
+      noun: THE DELTA
+      query: (delta OR estuary)
+      pool: null
+      label_locations: true
+    moorland:
+      noun: THE MOORS
+      query: (moor OR moorland OR heathland)
+      pool: null
+      label_locations: true
+    steppe:
+      noun: THE STEPPE
+      query: (steppe OR prairie OR grassland)
+      pool: null
+      label_locations: true
+    frozen_lakes:
+      noun: FROZEN WATER
+      query: (frozen OR icebound)
+      pool: null
+      label_locations: true
+    ice_caves:
+      noun: ICE CAVES
+      query: (icecave OR glacier OR crevasse)
+      pool: null
+      label_locations: true
+    lava_flows:
+      noun: THE LAVA
+      query: (lava OR magma OR basalt)
+      pool: null
+      label_locations: true
+    fumaroles:
+      noun: THE VENTS
+      query: (fumarole OR solfatara OR mudpot)
+      pool: null
+      label_locations: true
+    atolls:
+      noun: THE ATOLLS
+      query: (atoll OR lagoon OR reef)
+      pool: null
+      label_locations: true
+    mesas:
+      noun: THE MESAS
+      query: (mesa OR butte OR plateau)
+      pool: null
+      label_locations: true
+    beaches:
+      noun: THE SHORE
+      query: (beach OR shore OR coastline)
+      pool: null
+      label_locations: true
+    cliffs:
+      noun: THE CLIFFS
+      query: (cliff OR cliffs OR escarpment)
+      pool: null
+      label_locations: true
+    springs:
+      noun: THE SPRINGS
+      query: (spring OR source OR fuente)
+      pool: null
+      label_locations: true
+    comets:
+      noun: THE COMETS
+      query: (comet OR comets)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    meteors:
+      noun: THE METEORS
+      query: (meteor OR perseid OR perseids)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    star_trails:
+      noun: STAR TRAILS
+      query: (startrail OR startrails OR circumpolar)
+      pool: null
+      label_locations: false
+    the_sun:
+      noun: THE SUN
+      query: (sun OR solar OR prominence)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    supernovae:
+      noun: SUPERNOVAE
+      query: (supernova OR remnant)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    star_birth:
+      noun: WHERE STARS FORM
+      query: (pillars OR protostar OR stellar)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    andromeda:
+      noun: ANDROMEDA
+      query: (andromeda OR messier)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    saturn_rings:
+      noun: THE RINGS
+      query: (saturn OR rings OR cassini)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    jupiter:
+      noun: JUPITER
+      query: (jupiter OR jovian OR juno)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    mars:
+      noun: MARS
+      query: (mars OR martian)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+    earth_space:
+      noun: OUR OWN EARTH
+      query: (earth OR terra OR blue)
+      pool: incategory:Featured_pictures_of_astronomy
+      label_locations: false
+captions:
+  keyword_leads:
+    devotional:
+    - Daily Bible verse and devotional encouragement
+    - A short devotional for today
+    - Today's scripture reading, in one verse
+    encouragement:
+    - Bible verse for encouragement when life feels heavy
+    - A verse for the days that ask too much of you
+    - Encouragement from scripture for a hard week
+    gratitude:
+    - A Bible verse about gratitude and thankfulness
+    - Scripture for a thankful heart
+    - A verse worth reading slowly before you say thank you
+    morning:
+    - Morning Bible verse for your quiet time
+    - A verse to start the morning on
+    - Scripture for the first quiet minutes of the day
+    scripture_art:
+    - Bible verse of the day
+    - Scripture, set plainly
+    - A verse worth keeping where you can see it
+    peace:
+    - A Bible verse about peace and rest
+    - Scripture for an anxious mind
+    - A verse for when you cannot settle
+    everyday_faith:
+    - Finding faith in ordinary, everyday moments
+    - A verse for an ordinary Tuesday
+    - Scripture for the unremarkable parts of the week
+    hope:
+    - A Bible verse about hope for today
+    - Scripture for holding on a little longer
+    - A verse about hope when it is in short supply
+  questions:
+  - Which line did you need today?
+  - Who came to mind while you read this?
+  - One word for where you are this week?
+  - Have you sat with this verse before?
+  - What would change if you believed this today?
+  save_asks:
+  - Save this for the day it stops being theoretical.
+  - Save it — you will want it on a worse morning than this one.
+  - Save this one, and pass it on if it is not just for you.
+  - Keep this where you will see it again.
+  - Save it for later — this one keeps.
+  reflection_fallbacks:
+  - Read it once for the sense of it, then once more slowly.
+  - Nothing here asks you to feel better first. It just says what is true.
+  - This was written to people who were not coping either.
+  - It is worth noticing what this verse does not ask of you.
+  - Short enough to carry around all day, which is probably the point.
+hashtags:
+  sets:
+    devotional:
+      label: Daily devotional
+      tags:
+      - '#dailydevotional'
+      - '#bibleverseoftheday'
+      - '#scripture'
+      - '#godsword'
+      - '#devotional'
+    encouragement:
+      label: Encouragement
+      tags:
+      - '#christianencouragement'
+      - '#faithoverfear'
+      - '#hopeinjesus'
+      - '#trustgod'
+      - '#encouragement'
+    gratitude:
+      label: Gratitude
+      tags:
+      - '#gratitude'
+      - '#gratefulheart'
+      - '#countyourblessings'
+      - '#thankful'
+      - '#blessed'
+    morning:
+      label: Morning quiet time
+      tags:
+      - '#morningdevotion'
+      - '#quiettime'
+      - '#morningprayer'
+      - '#timewithgod'
+      - '#startyourday'
+    scripture_art:
+      label: Scripture art
+      tags:
+      - '#bibleverse'
+      - '#scriptureart'
+      - '#christianart'
+      - '#wordofgod'
+      - '#versedesign'
+    peace:
+      label: Peace and rest
+      tags:
+      - '#peaceofgod'
+      - '#restinhim'
+      - '#findingpeace'
+      - '#stillness'
+      - '#christianmeditation'
+    everyday_faith:
+      label: Everyday faith
+      tags:
+      - '#faithintheordinary'
+      - '#everydayfaith'
+      - '#simplefaith'
+      - '#livingbyfaith'
+      - '#ordinarydays'
+    hope:
+      label: Hope
+      tags:
+      - '#hopeinchrist'
+      - '#newmercies'
+      - '#freshstart'
+      - '#godisgood'
+      - '#hopeful'
+series:
+- id: psalms-for-anxious-nights
+  title: Psalms for Anxious Nights
+  subject: night sky
+  references:
+  - Psalm 4:8
+  - Psalm 23:4
+  - Psalm 34:4
+  - Psalm 46:1
+  - Psalm 56:3
+  - Psalm 91:5
+  - Psalm 121:3
+- id: when-the-work-feels-small
+  title: When the Work Feels Small
+  subject: morning light through a window
+  references:
+  - Colossians 3:23
+  - Galatians 6:9
+  - 1 Corinthians 15:58
+  - Zechariah 4:10
+  - Ecclesiastes 9:10
+  - Matthew 25:21
+  - 1 Thessalonians 4:11
+- id: gratitude-in-ordinary-days
+  title: Gratitude in Ordinary Days
+  subject: wildflowers in a field
+  references:
+  - 1 Thessalonians 5:18
+  - Psalm 118:24
+  - James 1:17
+  - Philippians 4:6
+  - Psalm 100:4
+  - Colossians 3:15
+  - Psalm 107:1
+- id: promises-for-hard-seasons
+  title: Promises for Hard Seasons
+  subject: storm clearing over hills
+  references:
+  - Isaiah 41:10
+  - Romans 8:28
+  - 2 Corinthians 4:17
+  - Psalm 34:18
+  - Isaiah 43:2
+  - Lamentations 3:22
+  - John 16:33
+- id: rest-for-the-weary
+  title: Rest for the Weary
+  subject: still lake at dawn
+  references:
+  - Matthew 11:28
+  - Psalm 23:2
+  - Exodus 33:14
+  - Mark 6:31
+  - Psalm 62:1
+  - Hebrews 4:9
+  - Isaiah 40:31
+themes:
+  story:
+  - peace and rest
+  - trust in the everyday
+  - gratitude
+  - hope for tomorrow
+  - stillness
+  - God's nearness
+  post:
+  - hope and trust
+  - encouragement in hard seasons
+  - gratitude
+  - faith in ordinary days
+  - peace
+  - new beginnings
+  quote_reel:
+  - God in the ordinary
+  - faith in ordinary days
+  - quiet beauty and grace
+  - peace in simple moments
+  - God's nearness in daily life
+  - gratitude for small things
+cadence:
+  post:
+    per_day: 1
+  carousel:
+    per_day: 1
+  reel:
+    per_day: 2
+  story:
+    per_day: 1
+footage:
+  moods:
+    hope:
+      keywords:
+      - hope
+      - promise
+      - dawn
+      - new
+      - begin
+      - future
+      - light
+      - joy
+      - resurrect
+      - morning
+      subjects:
+      - soft morning mist over a quiet meadow at sunrise
+      - sunlight breaking through low clouds over open fields
+      - calm lake at dawn with gentle reflections
+      - gentle ocean waves on an empty shore at first light
+    struggle:
+      keywords:
+      - fear
+      - doubt
+      - storm
+      - trial
+      - suffer
+      - grief
+      - hard
+      - dark
+      - lost
+      - wilderness
+      - judgment
+      - end
+      - wrath
+      subjects:
+      - desert dunes under a soft dawn sky
+      - quiet mountain range under soft blue haze
+      - rain on a window with soft daylight behind
+      - snowfall over silent evergreen trees
+    rest:
+      keywords:
+      - rest
+      - peace
+      - still
+      - quiet
+      - calm
+      - sleep
+      - night
+      - comfort
+      - abide
+      - wait
+      subjects:
+      - calm lake at dawn with gentle reflections
+      - still river winding through autumn woodland
+      - dew on wild grass in early morning light
+      - a narrow country path between hedgerows at dusk
+    gratitude:
+      keywords:
+      - thank
+      - grateful
+      - gratitude
+      - praise
+      - bless
+      - harvest
+      - abundance
+      - provide
+      - ordinary
+      - daily
+      subjects:
+      - wheat field swaying in warm evening light
+      - golden hour light through tall forest pines
+      - rolling hills under a wide pastel sky
+      - dew on wild grass in early morning light

@@ -12,9 +12,11 @@ Two rules this module exists to enforce:
    error that costs credibility outright. A reference that cannot be fetched is
    discarded, not guessed at.
 
-2. **Only public-domain translations.** KJV and WEB are public domain. NIV/ESV/
-   NLT are copyrighted with strict quoting limits and are not safe to post on an
-   account being grown commercially.
+2. **Only public-domain translations.** See PUBLIC_DOMAIN_TRANSLATIONS, every
+   entry of which was checked against bible-api.com's own licence field. The
+   default is WEBBE — modern English without WEB's "Yahweh is my shepherd".
+   NIV/ESV/NLT are copyrighted with strict quoting limits and are not safe to
+   post on an account being grown commercially.
 """
 
 from __future__ import annotations
@@ -54,7 +56,17 @@ SDXL_BUCKET = {
     "story": (768, 1344),
 }
 
-PUBLIC_DOMAIN_TRANSLATIONS = {"kjv", "web"}
+# Public domain only. NIV/ESV/NLT are copyrighted with strict quoting limits and
+# are not safe on an account being grown commercially. Every id here was checked
+# against bible-api.com/data, which reports its own licence per translation.
+#
+# `webbe` is the default rather than `kjv`: it is the modern-English option that
+# does NOT have web's "Yahweh is my shepherd" problem (it renders Psalm 23:1 as
+# "The LORD is my shepherd"), which was the whole reason KJV was chosen. KJV's
+# "that ye may abound" / "which strengtheneth me" is a real shareability tax —
+# people do not forward a verse they have to parse.
+PUBLIC_DOMAIN_TRANSLATIONS = {"kjv", "web", "webbe", "asv", "bbe", "oeb-us"}
+DEFAULT_TRANSLATION = "webbe"
 
 # Backgrounds are deliberately unpeopled. AI depictions of Jesus or biblical
 # figures land in the uncanny valley and reliably draw criticism on faith
@@ -142,14 +154,54 @@ def _comfy_url() -> str:
     return str(_cfg("comfyui_base_url", "http://192.168.0.135:8188")).rstrip("/")
 
 
+def background_subjects() -> list:
+    """Background vocabulary, from the pack if it defines one."""
+    from app.services import pack
+
+    return pack.typed("verse_card.background_subjects", BACKGROUND_SUBJECTS)
+
+
+def style_suffix() -> str:
+    from app.services import pack
+
+    return pack.value("verse_card.style_suffix", STYLE_SUFFIX)
+
+
+def negative_prompt() -> str:
+    """The unpeopled guarantee.
+
+    Overridable because a non-faith account has different things to exclude —
+    but note brand_motion leans on this being tuned and trusted, so a pack that
+    weakens it weakens the Reel imagery guarantee too.
+    """
+    from app.services import pack
+
+    return pack.value("verse_card.negative_prompt", NEGATIVE_PROMPT)
+
+
+def _preferred_chars() -> int:
+    """Preferred verse length at SELECTION time (see select_verse).
+
+    Distinct from MAX_CHARS, which is the split budget. Reference accounts in
+    this niche hold to roughly 6-14 words; 110 characters is about that, and
+    leaves the type large enough to read in the feed grid.
+    """
+    try:
+        value = int(_cfg("verse_max_chars", 110))
+    except (TypeError, ValueError):
+        return 110
+    return value if value > 0 else 110
+
+
 def _translation() -> str:
-    t = str(_cfg("verse_translation", "kjv")).strip().lower()
+    t = str(_cfg("verse_translation", DEFAULT_TRANSLATION)).strip().lower()
     if t not in PUBLIC_DOMAIN_TRANSLATIONS:
         logger.warning(
-            f"verse_translation '{t}' is not public domain; falling back to kjv. "
-            "Copyrighted translations (NIV/ESV/NLT) are not safe to publish."
+            f"verse_translation '{t}' is not public domain; falling back to "
+            f"{DEFAULT_TRANSLATION}. Copyrighted translations (NIV/ESV/NLT) are "
+            "not safe to publish."
         )
-        return "kjv"
+        return DEFAULT_TRANSLATION
     return t
 
 
@@ -181,7 +233,8 @@ def _todays_post_path() -> str:
     return os.path.join(os.path.dirname(_state_path()), "todays_post.json")
 
 
-def _remember_todays_post(verse: Verse, bg: Image.Image, set_id: Optional[str]) -> None:
+def _remember_todays_post(verse: Verse, bg: Image.Image, set_id: Optional[str],
+                          series_label: Optional[str] = None) -> None:
     """Keep the day's feed card so its story twin can reuse verse and background.
 
     Instagram's Content Publishing API cannot re-share a feed post to a story —
@@ -202,6 +255,7 @@ def _remember_todays_post(verse: Verse, bg: Image.Image, set_id: Optional[str]) 
                 "text": verse.text,
                 "translation": verse.translation,
                 "set_id": set_id,
+                "series_label": series_label,
                 "bg_path": bg_path,
             }, fh)
     except (OSError, ValueError) as exc:
@@ -305,6 +359,33 @@ def pick_reference(theme: str = "", avoid: Optional[list[str]] = None) -> Option
 # --- 2. authoritative text ---------------------------------------------------
 
 
+_QUOTE_CHARS = "“”\"'‘’"
+
+
+def _strip_dangling_quotes(text: str) -> str:
+    """Drop a leading or trailing quote mark that has no partner.
+
+    Translations that mark direct speech hand back fragments like
+    ``“Come to me, all you who labour`` (open, never closed) or
+    ``...wherever you go.”`` (closed, never opened), because the quotation spans
+    verses the reference does not. The card and the caption both wrap the text in
+    their own quotes, so an unbalanced one renders as ``““Come to me...`` — the
+    kind of small wrongness that reads as carelessness on a scripture account.
+
+    Only strips when the count is genuinely unbalanced, so a verse that opens and
+    closes its own quotation keeps both marks.
+    """
+    if not text:
+        return text
+    opens = text.count("“")
+    closes = text.count("”")
+    if opens > closes and text[0] in _QUOTE_CHARS:
+        text = text[1:].lstrip()
+    elif closes > opens and text[-1] in _QUOTE_CHARS:
+        text = text[:-1].rstrip()
+    return text
+
+
 def fetch_verse(reference: str, translation: Optional[str] = None) -> Optional[Verse]:
     """Fetch verse text by reference. Returns None if the reference is not real."""
     translation = (translation or _translation()).lower()
@@ -325,12 +406,12 @@ def fetch_verse(reference: str, translation: Optional[str] = None) -> Optional[V
     except ValueError:
         return None
 
-    text = " ".join((data.get("text") or "").split())
+    text = _strip_dangling_quotes(" ".join((data.get("text") or "").split()))
     if not text:
         return None
     verses = []
     for item in (data.get("verses") or []):
-        vtext = " ".join(str(item.get("text") or "").split())
+        vtext = _strip_dangling_quotes(" ".join(str(item.get("text") or "").split()))
         if not vtext:
             continue
         verses.append({
@@ -410,17 +491,42 @@ def split_verse(verse: Verse, kind: str = "post") -> list:
     return parts
 
 
-def select_verse(theme: str = "", attempts: int = 4) -> Optional[Verse]:
-    """LLM proposes, the API decides. Unfetchable references are discarded."""
+def select_verse(theme: str = "", attempts: int = 6) -> Optional[Verse]:
+    """LLM proposes, the API decides. Unfetchable references are discarded.
+
+    Verses longer than the preferred budget are re-rolled rather than rejected.
+    MAX_CHARS is the point at which a passage is SPLIT across cards; this is a
+    much lower bar, about what a card can set at a size that survives the feed
+    grid. Romans 15:13 is 130 characters, fits on one card, and sets as seven
+    lines of type — legible full-screen and grey mush at thumbnail size, which
+    is where the decision to stop scrolling is actually made.
+
+    It is a preference, not a gate: the first verified verse is kept as a
+    fallback and returned if nothing shorter turns up, so a long verse costs
+    variety rather than the whole slot.
+    """
+    budget = _preferred_chars()
     avoid = _recent_references()
+    fallback: Optional[Verse] = None
     for _ in range(attempts):
         ref = pick_reference(theme, avoid=avoid)
         if not ref:
             continue
         verse = fetch_verse(ref)
-        if verse:
+        if not verse:
+            avoid = avoid + [ref]
+            continue
+        if len(verse.text) <= budget:
             return verse
+        if fallback is None:
+            fallback = verse
+        logger.info(f"{verse.reference} is {len(verse.text)} chars (over the "
+                    f"{budget}-char card budget); asking for a shorter one")
         avoid = avoid + [ref]
+    if fallback is not None:
+        logger.warning(f"no verse under {budget} chars after {attempts} attempts; "
+                       f"using {fallback.reference} ({len(fallback.text)} chars)")
+        return fallback
     logger.error("could not obtain a verified verse after %d attempts" % attempts)
     return None
 
@@ -484,7 +590,8 @@ def _workflow(prompt: str, width: int, height: int, seed: int, ckpt: str,
         "5": {"class_type": "EmptyLatentImage",
               "inputs": {"width": width, "height": height, "batch_size": 1}},
         "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["4", 1]}},
-        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": NEGATIVE_PROMPT, "clip": ["4", 1]}},
+        "7": {"class_type": "CLIPTextEncode",
+              "inputs": {"text": negative_prompt(), "clip": ["4", 1]}},
         "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
         "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "versecard"}},
     }
@@ -511,8 +618,8 @@ def generate_background(kind: str = "post", subject: Optional[str] = None,
     base = _comfy_url()
     width, height = SDXL_BUCKET.get(kind, SDXL_BUCKET["post"])
     hires = hires_size((width, height), ASPECTS.get(kind, ASPECTS["post"]))
-    subject = subject or random.choice(BACKGROUND_SUBJECTS)
-    prompt = f"{subject}, {STYLE_SUFFIX}"
+    subject = subject or random.choice(background_subjects())
+    prompt = f"{subject}, {style_suffix()}"
     seed = seed if seed is not None else random.randint(1, 2**31 - 1)
     ckpt = str(_cfg("comfyui_checkpoint", "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"))
 
@@ -854,7 +961,7 @@ def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = No
         # the series name leads rather than trailing after the verse.
         caption = f"{series_label}\n\n{caption}"
     if kind == "post" and bg is not None:
-        _remember_todays_post(verse, bg, set_id)
+        _remember_todays_post(verse, bg, set_id, series_label)
     return {"path": paths[0], "paths": paths, "parts": parts,
             "verse": verse, "caption": caption, "kind": kind,
             "set_id": set_id, "series_label": series_label}
@@ -879,7 +986,14 @@ def create_story_from_todays_post() -> Optional[dict]:
                   translation=record["translation"])
     # The background cleared the gate at 4:5; the 9:16 crop samples different
     # pixels, so it is measured again rather than assumed.
-    path = compose_card(bg, verse, kind="story", point_at_post=True)
+    #
+    # The twin carries the SAME series label as the card it is built from. It is
+    # the one story that is genuinely part of the series, and without the label
+    # the pair reads as two unrelated cards — which is the exact thing rebuilding
+    # it from the same verse and background exists to prevent.
+    series_label = record.get("series_label") or None
+    path = compose_card(bg, verse, kind="story", point_at_post=True,
+                        series_label=series_label)
     if not path:
         logger.warning("story twin rejected on contrast; falling back to a fresh story")
         return None
@@ -933,6 +1047,23 @@ def publish_card(card: dict, publish_at=None) -> dict:
             return upload
         media.append(upload["media"])
 
+    # What produced this card, recorded at publish time because it cannot be
+    # reconstructed later: the verse rotates, the series advances, and by the
+    # time the numbers arrive two days on, the card is just a JPEG. Reels have
+    # carried a variant since retention tracking; cards and carousels carried
+    # none, so reach could only ever be attributed to the hashtag set.
+    verse = card.get("verse")
+    variant = {
+        "format": kind,
+        "reference": getattr(verse, "reference", None),
+        "translation": getattr(verse, "translation", None),
+        "verse_chars": len(getattr(verse, "text", "") or "") or None,
+        "series": card.get("series_label"),
+        "twin_of_post": bool(card.get("twin_of_post")) or None,
+        "parts": len(paths) if len(paths) > 1 else None,
+    }
+    variant = {k: v for k, v in variant.items() if v is not None}
+
     if kind == "story":
         # Instagram stories take exactly one image each ("if it's a story, it can
         # have only one picture" — Postiz's own provider). A split passage is
@@ -943,7 +1074,8 @@ def publish_card(card: dict, publish_at=None) -> dict:
             at = publish_at + timedelta(minutes=2 * i) if i else publish_at
             res = svc.schedule_post(item, card["caption"], at,
                                     integration=integration["integration"], kind=kind,
-                                    set_id=card.get("set_id") if i == 0 else None)
+                                    set_id=card.get("set_id") if i == 0 else None,
+                                    variant=variant if i == 0 else None)
             results.append(res)
             if not res.get("success"):
                 logger.error(f"story part {i + 1}/{len(media)} failed: "
@@ -957,7 +1089,7 @@ def publish_card(card: dict, publish_at=None) -> dict:
         result = svc.schedule_post(media if len(media) > 1 else media[0],
                                    card["caption"], publish_at,
                                    integration=integration["integration"], kind=kind,
-                                   set_id=card.get("set_id"))
+                                   set_id=card.get("set_id"), variant=variant)
         result = dict(result)
         result["parts"] = len(media)
 

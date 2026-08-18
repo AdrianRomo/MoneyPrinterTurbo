@@ -270,8 +270,13 @@ COVER_VARIANTS = [
     "{count} PLACES THAT LOOK PAINTED",
     "DID GOD OVERDO IT WITH {noun}?",
     "{noun}, AND NOTHING WE MADE",
-    "LOOK AT {noun}",
+    "{count} THINGS NOBODY DESIGNED",
+    "YOU HAVE NEVER SEEN {noun} LIKE THIS",
 ]
+# Dropped: "LOOK AT {noun}". It is an instruction, not a hook — it opens no
+# curiosity gap, and it is the one that fired on the flattest cover the account
+# has published. Every variant here either poses a question, promises a count,
+# or makes a claim worth checking.
 # Wildlife and space are not "places"; keep those variants off them.
 PLACE_ONLY_VARIANTS = {1}
 
@@ -285,7 +290,40 @@ QUESTIONS = [
     "Tag someone who needs to see slide 3.",
 ]
 
-CTA_LINES = ("more of creation,", "twice a week")
+# The closing slide asks for the SAVE, not the follow. Saves are weighted x12
+# and shares x20 in hashtags.SCORE_WEIGHTS, a follow is not weighted at all, and
+# "follow for more" is the ask every account on the platform is already making.
+#
+# It also no longer states a cadence. The old copy promised "twice a week" while
+# the account published a carousel daily — a brand promise contradicted by the
+# posting schedule is worse than no promise, and it silently goes stale every
+# time PLAN changes.
+CTA_LINES = ("keep this one", "for a slower morning")
+CTA_MICRO = "SAVE  ·  SHARE  ·  FOLLOW"
+
+
+def subjects() -> dict:
+    """Subject vocabulary, from the pack if it defines one.
+
+    Pack form is a mapping so it is readable and diffable; the code wants the
+    same 4-tuple SUBJECTS has always been. A malformed entry is skipped rather
+    than allowed to fail inside build().
+    """
+    from app.services import pack
+
+    raw = pack.value("carousel.subjects")
+    if not isinstance(raw, dict):
+        return SUBJECTS
+    out = {}
+    for key, spec in raw.items():
+        if not isinstance(spec, dict) or not spec.get("query"):
+            logger.warning(f"pack subject {key!r} is malformed; skipping it")
+            continue
+        out[key] = (str(spec.get("noun") or key.replace("_", " ").upper()),
+                    str(spec["query"]),
+                    spec.get("pool") or None,
+                    bool(spec.get("label_locations", False)))
+    return out or SUBJECTS
 
 
 def _cfg(key: str, default: str) -> str:
@@ -294,10 +332,31 @@ def _cfg(key: str, default: str) -> str:
 
 
 def wordmark() -> str:
-    return _cfg("brand_wordmark", "holy ordinary")
+    """The pack wins where it declares a brand; config.toml is the fallback.
+
+    This precedence is the opposite of the obvious one, and the second pack is
+    what forced it. config.toml already carried `brand_wordmark = "holy
+    ordinary"` from before packs existed, so with config on top EVERY pack
+    rendered the first account's wordmark — a second account could never get its
+    own brand, which defeats the point of a pack.
+
+    A pack IS the account's identity. A deployment that wants to differ should
+    use a different pack, not a config key. No-op for the current account: its
+    pack declares the same wordmark config already set.
+    """
+    from app.services import pack
+
+    packed = pack.value("brand.wordmark")
+    return str(packed) if packed else _cfg("brand_wordmark", "holy ordinary")
 
 
 def tagline() -> tuple[str, str]:
+    from app.services import pack
+
+    packed = pack.value("brand.tagline")
+    if isinstance(packed, (list, tuple)) and len(packed) == 2:
+        first, second = str(packed[0]).strip(), str(packed[1]).strip()
+        return (first, second if second.startswith("×") else f"× {second}")
     raw = _cfg("brand_tagline", "creation × wonder")
     parts = [p.strip() for p in re.split(r"[×x]", raw, maxsplit=1)]
     return (parts[0], "× " + parts[1]) if len(parts) == 2 else (raw, "")
@@ -350,10 +409,39 @@ def _draw_furniture(img: Image.Image, location: Optional[str], credit: Optional[
     if credit:
         # CC BY requires attribution; keep it discreet but present on-slide.
         f_credit = ty.font(ty.SANS, int(w * 0.0105), "Regular")
+        credit = _fit_credit(draw, credit, f_credit, w - 2 * margin)
         cw = ty.width(draw, credit, f_credit, ty.TRACK_MICRO)
         ty.draw_tracked(draw, (w - margin - cw, int(h * 0.868)), credit, f_credit,
                         (255, 255, 255, 145), ty.TRACK_MICRO)
     return img
+
+
+def _fit_credit(draw, credit: str, font, max_px: int) -> str:
+    """Shorten an over-long credit so it cannot run off the slide.
+
+    The credit is right-aligned by measuring its own width, so nothing stopped a
+    long one starting at a negative x. Observatory images are the case that
+    breaks it: the Tarantula Nebula cover published 2026-08-15 credits eleven
+    named astronomers and their institutions, and the line ran off BOTH edges of
+    the frame.
+
+    Truncation is on the AUTHOR only and the licence is always kept, because the
+    licence is the part with legal weight — CC BY requires attribution, and "et
+    al." is accepted scholarly practice for a long author list where dropping the
+    licence would not be acceptable at all.
+    """
+    if ty.width(draw, credit, font, ty.TRACK_MICRO) <= max_px:
+        return credit
+    author, _, licence = credit.rpartition(" / ")
+    if not author:
+        return credit
+    words = author.split()
+    while words and ty.width(draw, f"{' '.join(words)} et al. / {licence}",
+                             font, ty.TRACK_MICRO) > max_px:
+        words.pop()
+    if not words:
+        return licence
+    return f"{' '.join(words)} et al. / {licence}"
 
 
 def _cover_slide(photo_img: Image.Image, title: str) -> Image.Image:
@@ -416,7 +504,8 @@ def rank_subjects(pool: Optional[list] = None) -> list:
     through the whole pool before any topic comes round again — the account had
     published `mountains` three times while 45 subjects had never run once.
     """
-    candidates = [s for s in (pool if pool is not None else SUBJECTS) if s in SUBJECTS]
+    known = subjects()
+    candidates = [s for s in (pool if pool is not None else known) if s in known]
     history = _recent_subjects()
     last_used = {subject: i for i, subject in enumerate(history)}
     unused = [s for s in candidates if s not in last_used]
@@ -428,7 +517,7 @@ def rank_subjects(pool: Optional[list] = None) -> list:
 def choose_subject() -> str:
     """Least-recently-used, so the pool is worked through before repeating."""
     ranked = rank_subjects()
-    return ranked[0] if ranked else random.choice(list(SUBJECTS))
+    return ranked[0] if ranked else random.choice(list(known))
 
 
 def _used_photos_path() -> str:
@@ -461,15 +550,23 @@ def _cta_slide(photo_img: Image.Image) -> Image.Image:
     account will ever have, and until now they were shown a photo and nothing
     to do."""
     img = _cover(photo_img, WIDTH, HEIGHT)
-    img = ImageEnhance.Color(img).enhance(0.55)
-    img = img.filter(ImageFilter.GaussianBlur(radius=WIDTH * 0.012))
+    # Softened, not obliterated. The old treatment stacked a 17px blur, a 0.55
+    # desaturation AND a 150-alpha black wash on the same frame, which turned a
+    # photograph into grey mush and made the last thing a swiper saw the worst
+    # image in the set. The type here is large and bold; it needs far less help
+    # than the verse cards do, and the slide should still read as the cover it
+    # bookends.
+    img = ImageEnhance.Color(img).enhance(0.72)
+    img = img.filter(ImageFilter.GaussianBlur(radius=WIDTH * 0.005))
     img = Image.alpha_composite(img.convert("RGBA"),
-                                Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 150))).convert("RGB")
+                                Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 105))).convert("RGB")
     draw = ImageDraw.Draw(img)
 
     f_lead = ty.font(ty.SERIF, int(WIDTH * 0.058), "Light")
     y = int(HEIGHT * 0.40)
-    for line in CTA_LINES:
+    from app.services import pack as _pack
+
+    for line in _pack.typed("carousel.cta_lines", list(CTA_LINES)):
         ty.draw_centered(draw, WIDTH, y, line, f_lead, (255, 255, 255, 240), 0.02)
         y += int(f_lead.size * 1.28)
 
@@ -478,7 +575,8 @@ def _cta_slide(photo_img: Image.Image) -> Image.Image:
                      (255, 255, 255), ty.TRACK_TITLE)
 
     f_small = ty.font(ty.SANS, int(WIDTH * 0.017), "Light")
-    ty.draw_centered(draw, WIDTH, y + int(HEIGHT * 0.11), "FOLLOW FOR MORE", f_small,
+    ty.draw_centered(draw, WIDTH, y + int(HEIGHT * 0.11),
+                     _pack.value("carousel.cta_micro", CTA_MICRO), f_small,
                      (255, 255, 255, 205), ty.TRACK_MICRO)
     return img
 
@@ -486,8 +584,9 @@ def _cta_slide(photo_img: Image.Image) -> Image.Image:
 def build(subject: Optional[str] = None, slides: int = 8,
           out_dir: str = OUT_DIR) -> Optional[dict]:
     """Build a carousel. Returns {paths, subject, title, photos, credits}."""
-    subject = subject if subject in SUBJECTS else choose_subject()
-    noun, query, extra_pool, label_locations = SUBJECTS[subject]
+    known = subjects()
+    subject = subject if subject in known else choose_subject()
+    noun, query, extra_pool, label_locations = known[subject]
     slides = max(3, min(slides, MAX_SLIDES))
 
     found = wikimedia.search(query, limit=slides * 4, extra_pool=extra_pool)
@@ -520,9 +619,10 @@ def build(subject: Optional[str] = None, slides: int = 8,
 
     os.makedirs(out_dir, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    paths, credits, scales = [], [], []
+    paths, credits, scales, colours = [], [], [], []
     used: list[wikimedia.Photo] = []
     cover_source: Optional[Image.Image] = None
+    headline = ""
 
     for photo in ordered:
         if len(paths) >= slides:
@@ -537,11 +637,31 @@ def build(subject: Optional[str] = None, slides: int = 8,
         if scale > MAX_UPSCALE:
             logger.warning(f"skipping {photo.title}: would upscale {scale:.2f}x")
             continue
+        # Enough pixels is not the same as worth looking at. Judged on the source
+        # before any furniture is drawn, and dropped for the next candidate the
+        # same way an upscale is — the 191-subject pool is deep enough to afford
+        # being picky, and a flat slide costs a swipe.
+        looks_ok, why = quality.check_slide_aesthetics(source)
+        if not looks_ok:
+            logger.warning(f"skipping {photo.title}: {why}")
+            continue
+        colours.append(quality.aesthetics(source)["colour"])
         index = len(paths)
         if index == 0:
-            choices = [v for i, v in enumerate(COVER_VARIANTS)
-                       if label_locations or i not in PLACE_ONLY_VARIANTS]
-            headline = random.choice(choices).format(noun=noun, count=slides - 1)
+            from app.services import hashtags as _hashtags
+
+            from app.services import pack as _pack
+
+            variants = _pack.typed("carousel.cover_variants", COVER_VARIANTS)
+            place_only = set(_pack.typed("carousel.place_only_variants",
+                                         sorted(PLACE_ONLY_VARIANTS)))
+            choices = [v for i, v in enumerate(variants)
+                       if label_locations or i not in place_only]
+            # Least-recently-used rather than random.choice: the cover is the one
+            # slide most people ever see, and a uniform draw over six templates
+            # repeats within a couple of posts.
+            headline = _hashtags.rotate("cover_variant", choices).format(
+                noun=noun, count=slides - 1)
             slide = _cover_slide(source, headline)
             cover_source = source        # the CTA bookends with it; don't refetch
         else:
@@ -563,7 +683,10 @@ def build(subject: Optional[str] = None, slides: int = 8,
         return None
 
     car = {"paths": paths, "subject": subject, "title": noun.title(),
-           "photos": used, "credits": credits, "scales": scales}
+           "photos": used, "credits": credits, "scales": scales,
+           # Kept for the publish variant: the cover hook and how flat the
+           # photography was are the two things worth reading back against reach.
+           "headline": headline, "colours": colours}
     # Closing CTA slide, built from the cover image so the set bookends.
     if len(paths) >= 3 and cover_source is not None:
         cta_path = os.path.join(out_dir, f"{stamp}-{subject}-zz-cta.jpg")
@@ -611,13 +734,53 @@ def science_note(subject: str) -> str:
     return text[:600]
 
 
+# The first line is the one Instagram indexes for search, and it was the SAME
+# sentence on every carousel ever published — the one text field that could
+# carry new keywords was carrying none. The body below it was identical too, so
+# two carousels in a row read as a form letter.
+#
+# {noun} is the plain subject ("mountains"), never the cover headline: the
+# headline is a rotating hook and would render as "The creativity of God in did
+# god overdo it with mountains?".
+CAPTION_LEADS = [
+    "The creativity of God in {noun}",
+    "{noun}, and what they say about the One who made them",
+    "A closer look at {noun}",
+    "Photographs of {noun}, and a reason to slow down",
+    "What {noun} are still doing without an audience",
+]
+
+CAPTION_BODIES = [
+    "Creation keeps saying something we did not invent. "
+    "Swipe through and let it slow you down for a minute.",
+    "None of this was made to be photographed. It was here first, "
+    "and it will be here after the scroll.",
+    "Swipe slowly. There is no hurry in any of these.",
+    "Every one of these is a real place, photographed by someone who went there.",
+    "Worth looking at for longer than an algorithm expects you to.",
+]
+
+# Saves are weighted x12 and shares x20; nothing in the caption ever asked.
+SAVE_ASKS = [
+    "Save this set for a day that needs slowing down.",
+    "Save it — and send it to whoever would stand there with you.",
+    "Keep this one. Share it if it is not just for you.",
+]
+
+
 def build_caption(car: dict) -> tuple[str, str]:
-    from app.services import hashtags
+    from app.services import hashtags, pack
 
     set_id = hashtags.choose_set()
-    lead = f"The creativity of God in {car['title'].lower()}"
-    body = ("Creation keeps saying something we did not invent. "
-            "Swipe through and let it slow you down for a minute.")
+    noun = car["title"].lower()
+    lead = hashtags.rotate("carousel_lead",
+                           pack.typed("carousel.caption_leads", CAPTION_LEADS)
+                           ).format(noun=noun)
+    # Templates that OPEN with {noun} would otherwise start the caption — and so
+    # the whole post — on a lowercase letter.
+    lead = lead[:1].upper() + lead[1:]
+    body = hashtags.rotate("carousel_body",
+                           pack.typed("carousel.caption_bodies", CAPTION_BODIES))
     note = science_note(car["subject"].replace("_", " "))
     tags = " ".join(hashtags.tags_for(set_id))
 
@@ -627,7 +790,10 @@ def build_caption(car: dict) -> tuple[str, str]:
     parts = [lead, body]
     if note:
         parts.append(note)
-    parts.append(random.choice(QUESTIONS))
+    parts.append(hashtags.rotate("carousel_question",
+                                 pack.typed("carousel.questions", QUESTIONS)))
+    parts.append(hashtags.rotate("carousel_save",
+                                 pack.typed("carousel.save_asks", SAVE_ASKS)))
     parts.append(tags)
     return "\n\n".join(parts), set_id
 
@@ -655,9 +821,20 @@ def publish(car: dict, publish_at=None) -> dict:
         media.append(up["media"])
 
     caption, set_id = build_caption(car)
+    # The subject and the cover hook are the two things most likely to decide
+    # whether a carousel is swiped, and neither was recorded anywhere. Both
+    # rotate, so neither can be recovered once the numbers arrive two days on.
+    variant = {
+        "format": "carousel",
+        "subject": car.get("subject"),
+        "cover_variant": car.get("headline"),
+        "slides": len(car.get("paths") or []),
+        "flattest_colour": round(min(car["colours"]), 1) if car.get("colours") else None,
+    }
     result = svc.schedule_post(media, caption, publish_at,
                                integration=integration["integration"],
-                               kind="carousel", set_id=set_id)
+                               kind="carousel", set_id=set_id,
+                               variant={k: v for k, v in variant.items() if v is not None})
     if result.get("success"):
         hashtags.mark_used(set_id)
     return result

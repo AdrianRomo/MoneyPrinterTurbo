@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 from typing import Optional
 
 from loguru import logger
@@ -109,13 +110,21 @@ def set_scores() -> dict[str, dict]:
     grouped: dict[str, list[float]] = {}
     for s in samples:
         sid = s.get("set_id")
-        if sid in SETS and isinstance(s.get("metrics"), dict):
+        if sid in _sets() and isinstance(s.get("metrics"), dict):
             grouped.setdefault(sid, []).append(score_of(s["metrics"]))
     return {sid: {"samples": len(v), "mean_score": sum(v) / len(v)} for sid, v in grouped.items() if v}
 
 
+def _sets() -> dict:
+    """Hashtag sets, from the pack if it defines any."""
+    from app.services import pack
+
+    return pack.typed("hashtags.sets", SETS)
+
+
 def choose_set(explicit: Optional[str] = None) -> str:
-    if explicit and explicit in SETS:
+    sets = _sets()
+    if explicit and explicit in sets:
         return explicit
 
     scores = set_scores()
@@ -132,12 +141,12 @@ def choose_set(explicit: Optional[str] = None) -> str:
     # Explore — or no data yet. Prefer whatever has been used least recently, so
     # early rotation is even rather than random-clumped.
     recent = _load("recent.json", [])
-    unused = [s for s in SETS if s not in recent]
+    unused = [s for s in sets if s not in recent]
     if unused:
         choice = random.choice(unused)
     else:
         # recent is most-recent-last; the front of the list is the stalest.
-        choice = next((s for s in recent if s in SETS), random.choice(list(SETS)))
+        choice = next((s for s in recent if s in sets), random.choice(list(sets)))
     logger.info(f"hashtag set '{choice}' chosen by rotation ({'no data yet' if not eligible else 'explore'})")
     return choice
 
@@ -149,11 +158,13 @@ def mark_used(set_id: str, keep: int = 6) -> None:
 
 
 def tags_for(set_id: str) -> list[str]:
-    return list(SETS.get(set_id, {}).get("tags", []))
+    return list(_sets().get(set_id, {}).get("tags", []))
 
 
 def record_sample(set_id: str, media_id: str, metrics: dict,
-                  variant: Optional[dict] = None) -> None:
+                  variant: Optional[dict] = None,
+                  kind: Optional[str] = None,
+                  local_hour: Optional[int] = None) -> None:
     """Called by the insights collector once a post's numbers are in."""
     samples = _load("samples.json", [])
     if any(s.get("media_id") == media_id for s in samples):
@@ -161,8 +172,82 @@ def record_sample(set_id: str, media_id: str, metrics: dict,
     sample = {"set_id": set_id, "media_id": media_id, "metrics": metrics}
     if variant:
         sample["variant"] = variant
+    if kind:
+        sample["kind"] = kind
+    if local_hour is not None:
+        sample["local_hour"] = int(local_hour)
     samples.append(sample)
     _save("samples.json", samples[-500:])
+
+
+# --- reach by dimension -------------------------------------------------------
+#
+# Until now this module scored exactly ONE variable — which hashtag set was used
+# — and its own docstring says hashtags have been a weak ranking signal since
+# 2024. Meanwhile format, cover variant, subject, verse and posting hour, all of
+# which plausibly matter more, were recorded at publish time and never read.
+#
+# These are read-only reports. Nothing selects on them yet, and that is
+# deliberate: with a handful of samples any of these breakdowns is noise, and
+# wiring a bandit to noise is how the hashtag rotation locked onto whichever set
+# happened to get shown twice. They exist so the priors in the runbook — the
+# posting windows especially, which it explicitly flags as unmeasured — can stop
+# being priors once there is enough data to read.
+
+_MIN_DIMENSION_SAMPLES = 3
+
+
+def _dimension_of(sample: dict, dimension: str):
+    """Pull one axis out of a sample, wherever it happens to live."""
+    if dimension in ("kind", "local_hour"):
+        return sample.get(dimension)
+    return (sample.get("variant") or {}).get(dimension)
+
+
+def reach_by(dimension: str, samples: Optional[list] = None) -> dict:
+    """{value: {samples, mean_score, mean_reach, saves, shares}} for one axis.
+
+    `dimension` is a ledger field ("kind", "local_hour") or a variant key
+    ("subject", "cover_variant", "reference", "series", ...).
+    """
+    if samples is None:
+        samples = _load("samples.json", [])
+    grouped: dict = {}
+    for s in samples:
+        value = _dimension_of(s, dimension)
+        if value is None or not isinstance(s.get("metrics"), dict):
+            continue
+        grouped.setdefault(str(value), []).append(s["metrics"])
+    out = {}
+    for value, rows in grouped.items():
+        n = len(rows)
+        out[value] = {
+            "samples": n,
+            "mean_score": round(sum(score_of(m) for m in rows) / n, 2),
+            "mean_reach": round(sum(float(m.get("reach", 0) or 0) for m in rows) / n, 2),
+            "saves": sum(int(m.get("saved", 0) or 0) for m in rows),
+            "shares": sum(int(m.get("shares", 0) or 0) for m in rows),
+            # Below this, a breakdown is a story about one or two posts.
+            "readable": n >= _MIN_DIMENSION_SAMPLES,
+        }
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]["mean_score"]))
+
+
+def dimension_report(dimensions: Optional[list] = None) -> dict:
+    """Every axis worth looking at, plus how much of the data carries it."""
+    samples = _load("samples.json", [])
+    dimensions = dimensions or ["kind", "local_hour", "subject", "cover_variant",
+                                "series", "translation", "hashtag_set"]
+    report = {"samples": len(samples), "dimensions": {}}
+    for dim in dimensions:
+        rows = reach_by(dim, samples)
+        if rows:
+            report["dimensions"][dim] = {
+                "coverage": sum(r["samples"] for r in rows.values()),
+                "readable": any(r["readable"] for r in rows.values()),
+                "values": rows,
+            }
+    return report
 
 
 # --- retention ---------------------------------------------------------------
@@ -230,28 +315,181 @@ def retention_report() -> dict:
 
 # Instagram indexes caption text for search; the first line is what surfaces.
 # Leading with a keyword-bearing sentence is worth more than the hashtag block.
-KEYWORD_LEADS = {
-    "devotional": "Daily Bible verse and devotional encouragement",
-    "encouragement": "Bible verse for encouragement when life feels heavy",
-    "gratitude": "A Bible verse about gratitude and thankfulness",
-    "morning": "Morning Bible verse for your quiet time",
-    "scripture_art": "Bible verse of the day",
-    "peace": "A Bible verse about peace and rest",
-    "everyday_faith": "Finding faith in ordinary, everyday moments",
-    "hope": "A Bible verse about hope for today",
+#
+# Each set carries SEVERAL leads rather than one. A fixed lead per set meant the
+# same eight sentences cycled forever: the one field Instagram actually searches
+# was carrying no new keywords, and two posts from the same set read as a
+# template. They stay keyword-bearing — that reasoning was right — they just
+# stop being identical.
+KEYWORD_LEADS: dict[str, list[str]] = {
+    "devotional": [
+        "Daily Bible verse and devotional encouragement",
+        "A short devotional for today",
+        "Today's scripture reading, in one verse",
+    ],
+    "encouragement": [
+        "Bible verse for encouragement when life feels heavy",
+        "A verse for the days that ask too much of you",
+        "Encouragement from scripture for a hard week",
+    ],
+    "gratitude": [
+        "A Bible verse about gratitude and thankfulness",
+        "Scripture for a thankful heart",
+        "A verse worth reading slowly before you say thank you",
+    ],
+    "morning": [
+        "Morning Bible verse for your quiet time",
+        "A verse to start the morning on",
+        "Scripture for the first quiet minutes of the day",
+    ],
+    "scripture_art": [
+        "Bible verse of the day",
+        "Scripture, set plainly",
+        "A verse worth keeping where you can see it",
+    ],
+    "peace": [
+        "A Bible verse about peace and rest",
+        "Scripture for an anxious mind",
+        "A verse for when you cannot settle",
+    ],
+    "everyday_faith": [
+        "Finding faith in ordinary, everyday moments",
+        "A verse for an ordinary Tuesday",
+        "Scripture for the unremarkable parts of the week",
+    ],
+    "hope": [
+        "A Bible verse about hope for today",
+        "Scripture for holding on a little longer",
+        "A verse about hope when it is in short supply",
+    ],
 }
+
+# Comments are the strongest ranking signal Instagram has, and effort is what
+# kills reply rates — every one of these is answerable in a word or two without
+# the reader having to compose anything. Same principle as carousel.QUESTIONS.
+QUESTIONS = [
+    "Which line did you need today?",
+    "Who came to mind while you read this?",
+    "One word for where you are this week?",
+    "Have you sat with this verse before?",
+    "What would change if you believed this today?",
+]
+
+# Saves are weighted x12 and shares x20 in SCORE_WEIGHTS, and until now nothing
+# in the content ever asked for either. An explicit ask is the cheapest lever on
+# the two metrics the scoring already says matter most.
+SAVE_ASKS = [
+    "Save this for the day it stops being theoretical.",
+    "Save it — you will want it on a worse morning than this one.",
+    "Save this one, and pass it on if it is not just for you.",
+    "Keep this where you will see it again.",
+    "Save it for later — this one keeps.",
+]
+
+# A reflection is commentary, never scripture. These carry the format when the
+# model is unavailable or its output fails the guards below — the caption must
+# never fall back to being a bare re-print of the image.
+REFLECTION_FALLBACKS = [
+    "Read it once for the sense of it, then once more slowly.",
+    "Nothing here asks you to feel better first. It just says what is true.",
+    "This was written to people who were not coping either.",
+    "It is worth noticing what this verse does not ask of you.",
+    "Short enough to carry around all day, which is probably the point.",
+]
+
+# The model may comment on scripture; it may never write, quote, paraphrase or
+# cite it. A reflection that quotes is indistinguishable from a misquote to a
+# reader, and a misquote is the error that costs credibility on a faith account.
+_REF_PATTERN = re.compile(r"\b\d?\s*[A-Z][a-z]+\.?\s+\d+[:.]\d+")
+_MAX_REFLECTION_CHARS = 190
+
+
+def reflection(verse_text: str, reference: str) -> str:
+    """One line of commentary on the verse, or "" if it cannot be trusted.
+
+    Guarded the same way carousel.science_note is: the prompt constrains it, and
+    anything that comes back looking like scripture is dropped rather than
+    repaired. Returning "" is safe — the caller substitutes a fallback line.
+    """
+    from app.services import llm
+
+    prompt = (
+        "Write ONE short sentence of plain reflection on the verse below, for "
+        "an Instagram caption. Maximum 22 words — shorter is better. Speak to "
+        "the reader as a person having an ordinary week. Do NOT quote the "
+        "verse, do not paraphrase it, do not cite any chapter or verse number, "
+        "and do not use quotation marks, hashtags or emoji. No preamble.\n"
+        f"Verse ({reference}): {verse_text}"
+    )
+    try:
+        raw = (llm._generate_response(prompt) or "").strip()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"reflection generation failed: {exc}")
+        return ""
+    line = " ".join(raw.splitlines()[0].split()) if raw else ""
+    line = line.strip().strip("*").strip()
+    if not line:
+        return ""
+    if len(line) > _MAX_REFLECTION_CHARS:
+        logger.warning("reflection too long; dropping it")
+        return ""
+    if any(ch in line for ch in '"“”'):
+        logger.warning("reflection quoted something; dropping it rather than risk a misquote")
+        return ""
+    if _REF_PATTERN.search(line):
+        logger.warning("reflection cited a reference; dropping it rather than risk a wrong one")
+        return ""
+    if "#" in line:
+        logger.warning("reflection contained a hashtag; dropping it")
+        return ""
+    return line
+
+
+def rotate(bucket: str, options: list[str], keep: int = 8) -> str:
+    """Pick from `options`, avoiding whatever was used most recently.
+
+    Same least-recently-used shape as choose_set's explore branch. Without it,
+    random.choice over five lines repeats within a couple of posts, which is
+    exactly the templated feel these banks exist to remove.
+    """
+    if not options:
+        return ""
+    recent = _load("recent_copy.json", {})
+    used = [s for s in recent.get(bucket, []) if s in options]
+    fresh = [s for s in options if s not in used]
+    choice = random.choice(fresh) if fresh else random.choice(options)
+    recent[bucket] = ([s for s in used if s != choice] + [choice])[-keep:]
+    _save("recent_copy.json", recent)
+    return choice
 
 
 def build_caption(verse_text: str, reference: str, translation: str,
-                  set_id: Optional[str] = None) -> tuple[str, str]:
-    """Return (caption, set_id). Keyword line first, verse, then a small tag set."""
+                  set_id: Optional[str] = None, reflect: bool = True) -> tuple[str, str]:
+    """Return (caption, set_id).
+
+    Shape: keyword lead, the verse, one line of reflection, a question, a save
+    ask, then a small tag set. The previous version led with a keyword line and
+    then reprinted the verse that is already rendered on the image — nothing in
+    it gave a reader a reason to stop, comment, or save, which are the three
+    things the ranking (and SCORE_WEIGHTS) actually reward.
+
+    `reflect=False` skips the model call for callers that cannot afford it.
+    """
+    from app.services import pack
+
     set_id = choose_set(set_id)
-    lead = KEYWORD_LEADS.get(set_id, "Bible verse of the day")
-    tags = " ".join(tags_for(set_id))
-    caption = (
-        f"{lead} — {reference}\n\n"
-        f"“{verse_text}”\n"
-        f"— {reference} ({translation})\n\n"
-        f"{tags}"
-    )
-    return caption, set_id
+    leads = (pack.typed("captions.keyword_leads", KEYWORD_LEADS).get(set_id)
+             or ["Bible verse of the day"])
+    lead = rotate(f"lead:{set_id}", leads)
+    note = reflection(verse_text, reference) if reflect else ""
+    if not note:
+        note = rotate("reflection", pack.typed("captions.reflection_fallbacks", REFLECTION_FALLBACKS))
+    blocks = [
+        f"{lead} — {reference}",
+        f"“{verse_text}”\n— {reference} ({translation.upper()})",
+        note,
+        rotate("question", pack.typed("captions.questions", QUESTIONS)),
+        rotate("save_ask", pack.typed("captions.save_asks", SAVE_ASKS)),
+        " ".join(tags_for(set_id)),
+    ]
+    return "\n\n".join(b for b in blocks if b), set_id

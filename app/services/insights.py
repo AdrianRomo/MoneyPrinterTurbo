@@ -112,6 +112,22 @@ def fetch_insights(token: str, media_id: str, product_type: str = "") -> dict:
     return out
 
 
+def _local_hour(when: datetime) -> Optional[int]:
+    """The hour of the account's civil day a post went out.
+
+    Posting time is one of the dimensions the windows were set from, and the
+    runbook is explicit that those windows are priors rather than measurements.
+    They cannot stop being priors until the hour is recorded next to the reach.
+    Uses the same local-day convention as the quota ledger.
+    """
+    try:
+        from app.services.postiz import _local_tz
+
+        return when.astimezone(_local_tz()).hour
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def collect(token: str, post_urls: dict[str, str]) -> dict:
     """post_urls: {postiz_post_id: releaseURL}. Returns a summary dict."""
     log = PostizService._load_publish_log()
@@ -145,7 +161,15 @@ def collect(token: str, post_urls: dict[str, str]) -> dict:
         # The variant recorded at publish time is what makes retention readable:
         # watch time on its own says nothing without the script length and the
         # treatment that produced it.
-        hashtags.record_sample(set_id, media["id"], metrics, variant=entry.get("variant"))
+        #
+        # kind and hour come from the ledger entry rather than the variant: they
+        # are known for EVERY post ever published, including the ones that
+        # predate variants entirely, so format and timing can be read back over
+        # the whole history instead of only over posts made from here on.
+        hashtags.record_sample(set_id, media["id"], metrics,
+                               variant=entry.get("variant"),
+                               kind=entry.get("kind"),
+                               local_hour=_local_hour(when))
         collected += 1
         retention = {k: v for k, v in metrics.items() if k in RETENTION_METRICS}
         logger.info(
@@ -154,10 +178,18 @@ def collect(token: str, post_urls: dict[str, str]) -> dict:
         )
 
     return {"collected": collected, "too_young": skipped_young, "unmatched": unmatched,
-            "scores": hashtags.set_scores(), "retention": hashtags.retention_report()}
+            "scores": hashtags.set_scores(), "retention": hashtags.retention_report(),
+            "dimensions": hashtags.dimension_report()}
 
 
 def main() -> int:
+    # --report reads what has already been collected. It needs no token and
+    # makes no API calls, so it is safe to run any time — including on a laptop
+    # that cannot reach docker-devops.
+    if "--report" in sys.argv[1:]:
+        print(json.dumps(hashtags.dimension_report(), indent=2, default=str))
+        return 0
+
     token = os.environ.get("IG_TOKEN", "").strip()
     if not token:
         print("IG_TOKEN not set", file=sys.stderr)

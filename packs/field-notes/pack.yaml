@@ -1,0 +1,191 @@
+# field-notes — a second pack, in a different vertical.
+#
+# Its job is to TEST the abstraction, not to be run: a pack that only ever has
+# one instance is a config file with extra steps. Written from scratch rather
+# than copied from holy-ordinary, so anything the pipeline still assumes about
+# the original account shows up as a failure here.
+#
+# The account it describes: natural-history writing. Real photographs of the
+# living world, with a short plain explanation of what is going on in them. No
+# faith framing, a different voice, a different cadence.
+#
+# WHAT THIS PACK EXERCISES: brand furniture, carousel subjects and queries,
+# every copy bank, hashtag sets, series, themes, cadence, footage moods.
+#
+# WHAT IT DELIBERATELY DOES NOT: verse cards. See `cadence.post` below — that
+# lane is genuinely scripture-bound and no pack key can change it, which is the
+# real limit this pack was built to find. Recorded in the runbook.
+
+meta:
+  name: field-notes
+  account: (unclaimed — this pack is a test of the abstraction)
+  description: >-
+    Natural-history carousels and quiet Reels. Real photographs of the living
+    world, with a short plain note on what is happening in them.
+  language: English
+
+brand:
+  wordmark: field notes
+  tagline:
+    - "observed"
+    - "× explained"
+
+carousel:
+  # Deliberately narrower and more specific than holy-ordinary's 191 — a small
+  # pool is a legitimate account shape, and it checks that nothing depends on
+  # the vocabulary being large. Every query is an OR group of 1-2 common words,
+  # which is the rule the 2026-08-17 starvation audit established.
+  subjects:
+    lichen:
+      noun: LICHEN
+      query: (lichen OR lichens)
+      label_locations: true
+    fungi:
+      noun: THE FUNGI
+      query: (mushroom OR fungus OR fungi)
+      label_locations: true
+    tide_pools:
+      noun: TIDE POOLS
+      query: (tidepool OR "rock pool" OR intertidal)
+      label_locations: true
+    moths:
+      noun: THE MOTHS
+      query: (moth OR moths OR lepidoptera)
+      label_locations: false
+    seeds:
+      noun: SEEDS AND SPORES
+      query: (seed OR seeds OR spore)
+      label_locations: false
+    murmurations:
+      noun: MURMURATIONS
+      query: (murmuration OR starlings OR flock)
+      label_locations: true
+    ice_forms:
+      noun: THE SHAPES OF ICE
+      query: (icicle OR "ice crystal" OR rime)
+      label_locations: true
+    beetles:
+      noun: THE BEETLES
+      query: (beetle OR beetles OR coleoptera)
+      label_locations: false
+
+  # No "creativity of God" here — a different account, a different claim.
+  cover_variants:
+    - "{count} THINGS HAPPENING WITHOUT YOU"
+    - "WHAT {noun} ARE ACTUALLY DOING"
+    - "{noun}, UP CLOSE"
+    - "YOU HAVE WALKED PAST {noun}"
+    - "{count} PHOTOGRAPHS, ONE EXPLANATION"
+  place_only_variants: []
+
+  caption_leads:
+    - "A closer look at {noun}"
+    - "{noun}, and what is actually going on"
+    - "Field notes on {noun}"
+    - "What you are looking at when you look at {noun}"
+
+  caption_bodies:
+    - "Swipe through. The last slide explains what you are seeing."
+    - "None of this is staged. It is just what happens when nobody is watching."
+    - "Photographed by people who went and stood there."
+    - "Worth knowing the next time you walk past one."
+
+  questions:
+    - "Seen one of these in person?"
+    - "Which slide surprised you?"
+    - "Where were you when you last saw this?"
+    - "Know what this one is called?"
+
+  save_asks:
+    - "Save this for your next walk."
+    - "Save it — you will want the name when you see one."
+    - "Keep this one. Send it to whoever points at things."
+
+  cta_lines:
+    - "more of the living world"
+    - "explained plainly"
+  cta_micro: "SAVE  ·  SHARE  ·  FOLLOW"
+
+captions:
+  keyword_leads:
+    curiosity:
+      - "Natural history, explained plainly"
+      - "A short field note"
+    identification:
+      - "How to recognise what you are looking at"
+      - "Field identification, in one photograph"
+    seasonal:
+      - "What to look for this month"
+      - "Seasonal field notes"
+  questions:
+    - "Seen this where you live?"
+    - "What would you want explained next?"
+    - "Ever noticed this before?"
+  save_asks:
+    - "Save it for your next walk."
+    - "Keep this where you will remember it."
+  reflection_fallbacks:
+    - "Most of this happens whether or not anyone is looking."
+    - "Worth a second look next time you pass one."
+
+hashtags:
+  sets:
+    curiosity:
+      label: Natural curiosity
+      tags: ["#naturalhistory", "#fieldnotes", "#natureisamazing", "#biology", "#wildlife"]
+    identification:
+      label: Identification
+      tags: ["#naturephotography", "#macrophotography", "#speciesid", "#nature", "#naturalist"]
+    seasonal:
+      label: Seasonal
+      tags: ["#seasonalchange", "#phenology", "#outdoors", "#getoutside", "#natureweekly"]
+
+series:
+  - id: things-that-glow
+    title: Things That Glow
+    subject: bioluminescent shore at night
+    references: []
+  - id: the-very-small
+    title: The Very Small
+    subject: dew on a spiderweb at dawn
+    references: []
+
+themes:
+  story:
+    - "something small worth noticing"
+    - "seasonal change"
+  post:
+    - "natural history"
+    - "quiet observation"
+  quote_reel:
+    - "the living world up close"
+    - "patterns in nature"
+    - "what happens when nobody is watching"
+
+# Fewer, larger posts than holy-ordinary — and NO verse cards.
+#
+# post: 0 is not a stylistic choice. The verse-card lane fetches its text from
+# bible-api and validates chapter:verse references, which no pack key can
+# redirect; a non-scripture account cannot use it at all. Setting the format to
+# zero is the honest way to express that, and finding it is exactly why this
+# pack exists. A text-provider abstraction would be the fix.
+cadence:
+  post: {per_day: 0}
+  story: {per_day: 0}
+  carousel: {per_day: 1}
+  reel: {per_day: 1}
+
+footage:
+  moods:
+    close:
+      keywords: ["small", "close", "detail", "tiny", "micro", "leaf", "seed"]
+      subjects:
+        - "dew on wild grass in early morning light"
+        - "frost on bare branches in blue morning light"
+        - "a quiet forest floor covered in fallen leaves"
+    open:
+      keywords: ["sky", "wide", "flock", "coast", "shore", "tide", "wind"]
+      subjects:
+        - "tall grass bending in coastal wind"
+        - "clouds building over a wide open plain"
+        - "gentle ocean waves on an empty shore at first light"

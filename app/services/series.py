@@ -101,8 +101,15 @@ def _save(state: dict) -> None:
         logger.warning(f"could not persist series state: {exc}")
 
 
+def all_series() -> list:
+    """Series definitions, from the pack if it defines any."""
+    from app.services import pack
+
+    return pack.typed("series", SERIES)
+
+
 def _series_by_id(series_id: str) -> Optional[dict]:
-    return next((s for s in SERIES if s["id"] == series_id), None)
+    return next((s for s in all_series() if s["id"] == series_id), None)
 
 
 def current() -> Optional[dict]:
