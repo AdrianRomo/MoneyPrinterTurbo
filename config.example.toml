@@ -389,10 +389,35 @@ quote_reel_scrim_max = 0.55
 quote_reel_max_text_band_luma = 150
 
 # A silent Reel gets scrolled past. Raw clip audio is always stripped; this mixes
-# a bed from the BGM library underneath instead.
+# a licensed bed underneath instead.
+#
+# The bed comes from the generated music pool (app/services/brand_music.py), NOT
+# from resource/songs/ — those 29 tracks ship with no licence file and Instagram
+# fingerprints audio, so an unlicensed bed risks a Reel being muted or region
+# blocked long after it published. Set quote_reel_music_file to override the
+# pool with one specific file of your own.
 quote_reel_music_enabled = true
 quote_reel_music_file = ""
 quote_reel_music_volume = 0.22
+
+# The licensed music pool. Beds are generated ahead of time through the
+# account's own ElevenLabs subscription, the same shape as the motion clip pool:
+# a paid API call and a multi-minute wait have no business inside the publish
+# path, where a timeout costs the post.
+#
+# Fill it with:  ./run-music-pool.sh --top-up
+#
+# The target is capped at (number of prompts x variants), so raising it beyond
+# that reports a shortfall the pool can never clear. Prompts default to six
+# instrumental beds in brand_music.PROMPTS and are overridable per account via
+# the pack's music.prompts.
+music_pool_target = 12
+music_pool_variants_per_prompt = 2
+
+# THE FALLBACK IS SILENCE. With an empty pool a Reel renders without a bed;
+# it does not reach for resource/songs/. Set this true only to knowingly accept
+# the licensing risk described above.
+music_allow_bundled_songs = false
 
 # Release checks, off by default. Stock metadata never carries an explicit talent
 # release, so turning these on flags every clip containing a person.

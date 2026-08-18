@@ -947,7 +947,13 @@ def _music_bed(duration: float):
         return None
     bed = str(config.app.get("quote_reel_music_file", "") or "").strip()
     try:
-        path = video.get_bgm_file(bgm_type="random" if not bed else "", bgm_file=bed)
+        # bgm_type MUST stay truthy. get_bgm_file returns "" for a falsy type
+        # before it ever looks at bgm_file, so passing "" alongside a configured
+        # bed silently dropped it and rendered silent — harmless while the key
+        # was unset, and actively confusing now that silence is also the
+        # empty-pool fallback. With a file set the type is ignored; without one,
+        # "random" resolves the licensed pool (see video.get_bgm_file).
+        path = video.get_bgm_file(bgm_type="random", bgm_file=bed)
     except Exception as exc:
         logger.warning(f"quote reel music selection failed: {exc}")
         return None

@@ -694,6 +694,28 @@ def get_bgm_file(bgm_type: str = "random", bgm_file: str = ""):
         return resolved_bgm_file
 
     if bgm_type == "random":
+        # Licensed music first. resource/songs/ ships 29 tracks with no licence
+        # file, present since the upstream init commit, and an unlicensed bed on
+        # a commercial brand account is a real risk — Instagram fingerprints
+        # audio and mutes or region-blocks what it does not clear. The pool is
+        # generated through the account's own ElevenLabs subscription, so the
+        # rights are unambiguous. See app/services/brand_music.py.
+        from app.services import brand_music
+
+        pooled = brand_music.select_track()
+        if pooled:
+            return pooled
+
+        if not brand_music._cfg_bool("music_allow_bundled_songs", False):
+            # SILENCE, not the bundled songs. Falling through to them here would
+            # quietly reinstate exactly the risk the pool exists to remove, and
+            # a silent Reel is a content problem where an unlicensed one is a
+            # legal one. Set music_allow_bundled_songs to opt back in knowingly.
+            logger.warning("music pool is empty; rendering without a bed "
+                           "(set music_allow_bundled_songs=true to use "
+                           "resource/songs, which is unlicensed)")
+            return ""
+
         files = bgm_service.list_bgm_files()
         # 当背景音乐目录为空时，直接回退为“不使用 BGM”，避免 random.choice([]) 抛异常。
         if not files:
