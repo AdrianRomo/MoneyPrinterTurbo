@@ -25,7 +25,7 @@ from loguru import logger
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 from app.config import config
-from app.services import wikimedia
+from app.services import rotation, wikimedia
 from app.services import quality, typography as ty
 from app.services.verse_card import _cover
 
@@ -469,31 +469,21 @@ def _cover_slide(photo_img: Image.Image, title: str) -> Image.Image:
     return img
 
 
+def _subjects_state() -> str:
+    return os.path.join(OUT_DIR, "recent_subjects.json")
+
+
 def _recent_subjects(limit: Optional[int] = None) -> list:
     """Subjects already published, oldest first.
 
     The window must be at least as long as the subject pool, or the rotation
     starts repeating while subjects that have never run are still waiting.
     """
-    import json
-    try:
-        with open(os.path.join(OUT_DIR, "recent_subjects.json"), encoding="utf-8") as fh:
-            history = list(json.load(fh))
-            return history[-limit:] if limit else history
-    except (OSError, ValueError):
-        return []
+    return rotation.load_history(_subjects_state(), limit)
 
 
 def _remember_subject(subject: str, keep: int = 500) -> None:
-    import json
-    os.makedirs(OUT_DIR, exist_ok=True)
-    recent = [s for s in _recent_subjects(keep) if s != subject]
-    recent.append(subject)
-    try:
-        with open(os.path.join(OUT_DIR, "recent_subjects.json"), "w", encoding="utf-8") as fh:
-            json.dump(recent[-keep:], fh)
-    except OSError as exc:
-        logger.warning(f"could not persist recent subjects: {exc}")
+    rotation.remember(_subjects_state(), subject, keep=keep)
 
 
 def rank_subjects(pool: Optional[list] = None) -> list:
@@ -503,21 +493,22 @@ def rank_subjects(pool: Optional[list] = None) -> list:
     rest oldest-first. Callers that try several subjects in order therefore work
     through the whole pool before any topic comes round again — the account had
     published `mountains` three times while 45 subjects had never run once.
+
+    The ordering itself lives in rotation.py, which is this fix generalised: the
+    same random.choice bug was still live on verse-card backgrounds and on the
+    background style, and one implementation is easier to trust than three.
     """
     known = subjects()
     candidates = [s for s in (pool if pool is not None else known) if s in known]
-    history = _recent_subjects()
-    last_used = {subject: i for i, subject in enumerate(history)}
-    unused = [s for s in candidates if s not in last_used]
-    random.shuffle(unused)
-    used = sorted((s for s in candidates if s in last_used), key=lambda s: last_used[s])
-    return unused + used
+    return rotation.rank(candidates, _recent_subjects())
 
 
 def choose_subject() -> str:
     """Least-recently-used, so the pool is worked through before repeating."""
     ranked = rank_subjects()
-    return ranked[0] if ranked else random.choice(list(known))
+    # The fallback used to reference `known`, which is local to rank_subjects —
+    # an empty pool raised NameError instead of degrading.
+    return ranked[0] if ranked else random.choice(list(subjects()))
 
 
 def _used_photos_path() -> str:

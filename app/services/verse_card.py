@@ -79,6 +79,9 @@ NEGATIVE_PROMPT = (
 )
 
 BACKGROUND_SUBJECTS = [
+    # --- the original thirty -------------------------------------------------
+    # Kept verbatim so the account's established look is still in rotation; the
+    # additions below widen the range rather than replacing it.
     "soft morning mist over a quiet meadow at sunrise",
     "golden hour light through tall forest pines",
     "calm lake at dawn with gentle reflections",
@@ -109,7 +112,186 @@ BACKGROUND_SUBJECTS = [
     "a quiet forest floor covered in fallen leaves",
     "moonlight over a calm sea",
     "first snow settling on a quiet field",
+
+    # --- texture and macro ---------------------------------------------------
+    # The whole account was WIDE. Nothing published was ever closer than a
+    # landscape, which is half of why every card read the same at thumbnail
+    # size: a distant vista has no dominant shape at 120px. Close focus gives
+    # the grid a second scale to alternate with.
+    "close detail of weathered olive wood grain",
+    "cracked dry earth in soft directional light",
+    "a single wheat stalk against a plain background",
+    "raindrops beaded on a green leaf",
+    "frost crystals forming on a dark surface",
+    "close detail of lichen on grey stone",
+    "the surface of still water disturbed by one drop",
+    "sand ripples in low raking light",
+    "close detail of tree bark with deep fissures",
+    "a feather resting on dark stone",
+    "pale sea glass on wet sand",
+    "the underside of a fern frond backlit",
+    "smooth river pebbles in shallow clear water",
+    "close detail of woven linen cloth",
+    "salt crystals on a dark tidal rock",
+    "moss growing in the crevice of a boulder",
+    "a spider web strung with morning dew",
+    "close detail of an unopened flower bud",
+    "wind-carved snow crust in blue shade",
+    "the ridged surface of a seashell",
+
+    # --- sky and weather -----------------------------------------------------
+    # Sky-dominant frames are the cleanest negative space the type ever gets,
+    # and they read at thumbnail size when a landscape does not.
+    "towering cumulus clouds in clear afternoon light",
+    "a break of blue between heavy grey clouds",
+    "high cirrus streaks across a pale sky",
+    "the last band of colour after sunset",
+    "a rainbow forming against dark storm cloud",
+    "mackerel sky at first light",
+    "rain falling from a distant cloud over open ground",
+    "clear night sky thick with stars",
+    "the milky way over an empty horizon",
+    "a crescent moon in deep blue twilight",
+    "sunbeams fanning through a gap in cloud",
+    "fog bank rolling in low over water",
+    "heat haze rising from a flat plain",
+    "a single cloud in an otherwise empty sky",
+    "the blue hour over a silent landscape",
+
+    # --- architecture and interior light -------------------------------------
+    # Human-made but unpeopled: hard geometry that the all-organic pool never
+    # offered, and the strongest available source of directional light.
+    "light falling through a tall arched window onto a stone floor",
+    "a worn stone staircase in soft shade",
+    "sunlight moving across a plain plaster wall",
+    "an open wooden door onto bright daylight",
+    "a narrow alley of pale stone at midday",
+    "rough-hewn stone wall in raking evening light",
+    "a quiet cloister walkway in deep shadow",
+    "weathered shutters on a sunlit wall",
+    "a simple wooden roof beam against white plaster",
+    "a stone well head in an empty courtyard",
+    "terracotta rooftops under a wide sky",
+    "an old stone bridge over still water",
+
+    # --- still life ----------------------------------------------------------
+    # Deliberate arrangement, controlled light, and the only frames in the pool
+    # with a guaranteed single focal object.
+    "an open book on a plain wooden table in window light",
+    "a clay cup beside a shuttered window",
+    "a loaf of bread on a bare wooden board",
+    "olive branches laid on rough linen",
+    "a beeswax candle burning in a dim room",
+    "a small brass bell on a stone ledge",
+    "a bowl of water reflecting a window",
+    "dried lavender tied with plain twine",
+    "a fishing net folded on a harbour wall",
+    "an oil lamp unlit on a stone sill",
+    "a handful of grain spilling from a cloth sack",
+    "a shepherd\'s staff leaning against a wall",
+
+    # --- water ---------------------------------------------------------------
+    "a waterfall through green moss-covered rock",
+    "a slow river bend under overhanging trees",
+    "clear shallows over pale sand",
+    "surf breaking white on dark rocks",
+    "a mountain tarn perfectly still at dawn",
+    "reeds standing in shallow marsh water",
+    "a frozen lake surface under low sun",
+    "spray rising at the base of a fall",
+
+    # --- forest and field ----------------------------------------------------
+    "a single oak alone in an open field",
+    "bluebells carpeting a woodland floor",
+    "an avenue of trees in full summer leaf",
+    "a hedgerow heavy with autumn berries",
+    "terraced vineyards on a warm hillside",
+    "a lavender field in rows to the horizon",
+    "bare winter trees against a white sky",
+    "a stubble field after harvest",
+    "pine forest under deep snow",
+    "a clearing lit by a single shaft of sun",
+
+    # --- mountain, desert and ice --------------------------------------------
+    "a jagged ridge line above the cloud layer",
+    "red rock canyon walls in warm reflected light",
+    "a glacier face in cold blue shadow",
+    "scree slopes under thin high cloud",
+    "salt flats mirroring an empty sky",
+    "a lone mesa on a flat desert plain",
+    "icicles hanging from a dark rock overhang",
+    "windswept dunes with a sharp shadow edge",
 ]
+
+# --- style: one brand core, many looks ---------------------------------------
+#
+# There used to be exactly ONE style string, appended to every background the
+# account has ever generated. Measured across the 41 cards published
+# 2026-08-14..27, that produced saturation never above 33/100, lightness never
+# above 54/100, and 66% of the feed inside two hue families. Different pixels,
+# one impression — which is what a scrolling reader actually perceives.
+#
+# The fix is to split the string by what it is FOR:
+#
+#   STYLE_CORE  is identity and legibility. "negative space" and "minimal
+#               composition" are not taste; the type has to go somewhere, and
+#               the contrast gate in quality.py rejects the card when it
+#               doesn\'t. These never rotate.
+#
+#   STYLE_LOOKS is light and palette, which are pure taste and the only axis
+#               the eye reads at thumbnail size. These rotate least-recently-
+#               used, exactly like carousel subjects.
+#
+# Lens focal length rides with the look rather than the core because it moves
+# with the light in practice: a long lens suits compressed low-key drama, a
+# wide one suits an open saturated midday frame.
+#
+# `ink` is the OTHER half of the fix, and the more important one. Rotating the
+# prompt vocabulary alone cannot produce a light card: the scrim in
+# compose_card darkens adaptively to keep WHITE type legible, so a high-key
+# background composes to a dark card anyway — measured end to end, six
+# backgrounds spanning light, mid and dark all landed "dark". A look that asks
+# for bright light therefore also asks for dark type on a lightened ground, and
+# rotation alternates the two polarities roughly half and half.
+#
+# TO REVERT THE ACCOUNT TO ALL-WHITE TYPE: set every `ink` to "light" in
+# packs/<name>/pack.yaml. Nothing else needs to change.
+STYLE_CORE = (
+    "photographic, natural light, serene, minimal composition, "
+    "negative space, high detail"
+)
+
+STYLE_LOOKS = [
+    # The incumbent look, kept first and kept verbatim: everything published so
+    # far is this, and it stays in rotation rather than being retired.
+    {"name": "muted-warm", "ink": "light",
+     "suffix": "shallow depth of field, muted warm tones, cinematic, 35mm"},
+    {"name": "high-key-airy", "ink": "dark",
+     "suffix": "high-key, bright airy exposure, pale delicate palette, "
+               "gentle haze, 50mm"},
+    {"name": "low-key-dramatic", "ink": "light",
+     "suffix": "low-key, deep shadow, single directional light source, "
+               "rich contrast, 85mm"},
+    {"name": "backlit-golden", "ink": "light",
+     "suffix": "strong backlight, golden hour rim light, warm glow, "
+               "atmospheric, 35mm"},
+    {"name": "overcast-cool", "ink": "dark",
+     "suffix": "flat overcast light, cool blue-grey palette, soft even tone, "
+               "50mm"},
+    {"name": "clear-vivid", "ink": "dark",
+     "suffix": "clear bright daylight, saturated natural colour, crisp, "
+               "deep blue sky, 24mm"},
+    {"name": "monochrome-quiet", "ink": "dark",
+     "suffix": "near-monochrome, tonal greyscale palette, fine film grain, "
+               "50mm"},
+    {"name": "blue-hour", "ink": "light",
+     "suffix": "blue hour, deep twilight, cool indigo palette, soft ambient "
+               "light, 35mm"},
+]
+
+# The pre-rotation string, unchanged. Retained as the fallback for a pack that
+# defines no looks, so "no looks configured" degrades to exactly the behaviour
+# that shipped rather than to no style at all.
 STYLE_SUFFIX = (
     "photographic, natural light, shallow depth of field, muted warm tones, "
     "cinematic, serene, minimal composition, negative space, 35mm, high detail"
@@ -154,6 +336,55 @@ def _comfy_url() -> str:
     return str(_cfg("comfyui_base_url", "http://192.168.0.135:8188")).rstrip("/")
 
 
+# Which visual register a subject belongs to, for the variety gate. Ordered:
+# the first pattern that matches wins, so the scale cues ("close detail",
+# "macro") are tested before the scene nouns they contain — "close detail of
+# lichen on grey stone" is a texture frame, not an architecture one.
+#
+# This is a bucketing heuristic, not a taxonomy. It exists so quality.py can ask
+# "is this the same KIND of picture as the last few?" and a rough answer is
+# worth far more than no answer. A subject that matches nothing lands in
+# "other", which the gate treats as its own bucket rather than as a wildcard.
+#
+# "sky" is tested LAST of the scene classes on purpose. Almost every landscape
+# prompt in the pool ends "...under a wide sky", so an early sky rule swallowed
+# 21 of 115 subjects and starved the terrain buckets. Only a frame with no
+# terrain noun at all is really a picture of the sky.
+SUBJECT_CLASSES = [
+    ("texture", ("close detail", "macro", "surface of", "crystals", "grain",
+                 "beaded", "web strung", "woven", "ripples in low")),
+    ("still-life", ("book", "cup", "bread", "candle", "bell", "bowl", "lamp",
+                    "lavender tied", "net folded", "grain spilling", "staff",
+                    "olive branches laid", "feather")),
+    ("architecture", ("window", "staircase", "wall", "door", "alley", "cloister",
+                      "shutters", "roof", "well head", "rooftops", "bridge",
+                      "beam", "floor")),
+    ("night", ("stars", "milky way", "moon", "moonlight", "night sky")),
+    ("water", ("lake", "river", "sea", "ocean", "waves", "harbour", "stream",
+               "waterfall", "shallows", "surf", "tarn", "marsh", "reeds",
+               "tide", "beach", "spray", "water")),
+    ("snow", ("snow", "frost", "ice", "glacier", "icicles", "frozen")),
+    ("desert", ("desert", "dunes", "canyon", "mesa", "salt flats", "dry earth",
+                "scree")),
+    ("mountain", ("mountain", "ridge", "hills", "hillside", "valley", "boulder")),
+    ("forest", ("forest", "trees", "tree", "woodland", "pines", "birch", "fern",
+                "moss", "bluebells", "hedgerow", "clearing", "leaves")),
+    ("field", ("meadow", "field", "grass", "wheat", "wildflowers", "vineyards",
+               "plain", "stubble", "harvest", "path")),
+    ("sky", ("cloud", "sky", "rainbow", "sunbeams", "haze rising", "fog bank",
+             "blue hour", "after sunset", "cirrus")),
+]
+
+
+def subject_class(subject: str) -> str:
+    """The visual register of a background subject. See SUBJECT_CLASSES."""
+    text = (subject or "").lower()
+    for name, needles in SUBJECT_CLASSES:
+        if any(n in text for n in needles):
+            return name
+    return "other"
+
+
 def background_subjects() -> list:
     """Background vocabulary, from the pack if it defines one."""
     from app.services import pack
@@ -165,6 +396,66 @@ def style_suffix() -> str:
     from app.services import pack
 
     return pack.value("verse_card.style_suffix", STYLE_SUFFIX)
+
+
+def style_core() -> str:
+    from app.services import pack
+
+    return pack.value("verse_card.style_core", STYLE_CORE)
+
+
+def style_looks() -> list:
+    from app.services import pack
+
+    return pack.typed("verse_card.style_looks", STYLE_LOOKS)
+
+
+def _rotation_path(name: str) -> str:
+    """Rotation state lives beside the used-reference list it is modelled on."""
+    return os.path.join(os.path.dirname(_state_path()), name)
+
+
+def choose_background_subject(remember_it: bool = True) -> str:
+    """Least-recently-used background subject.
+
+    This was `random.choice` — the only selection axis in the module without an
+    anti-repeat, while verse references had one and carousel subjects had one.
+    Random *with replacement* over 30 near-synonymous prompts is why the feed
+    read as a single photograph taken 54 times.
+    """
+    from app.services import rotation
+
+    pool = background_subjects() or BACKGROUND_SUBJECTS
+    picked = rotation.choose(pool, _rotation_path("used_backgrounds.json"),
+                             remember_it=remember_it)
+    return picked or random.choice(pool)
+
+
+def choose_look(remember_it: bool = True) -> dict:
+    """Least-recently-used style look. See STYLE_LOOKS for why this rotates."""
+    from app.services import rotation
+
+    looks = style_looks() or STYLE_LOOKS
+    names = [str(l.get("name", "")) for l in looks if isinstance(l, dict)]
+    by_name = {str(l.get("name", "")): l for l in looks if isinstance(l, dict)}
+    if not names:
+        return {}
+    name = rotation.choose(names, _rotation_path("used_looks.json"),
+                           remember_it=remember_it)
+    return by_name.get(name or "", {})
+
+
+def style_for(look: Optional[dict] = None) -> str:
+    """The full style string for a look: its light and palette, then the core.
+
+    A look that is missing or malformed falls back to the pre-rotation string,
+    so the failure mode is "the account's established look" rather than "a
+    background with no style direction at all".
+    """
+    suffix = (look or {}).get("suffix")
+    if not suffix:
+        return style_suffix()
+    return f"{suffix}, {style_core()}"
 
 
 def negative_prompt() -> str:
@@ -234,7 +525,8 @@ def _todays_post_path() -> str:
 
 
 def _remember_todays_post(verse: Verse, bg: Image.Image, set_id: Optional[str],
-                          series_label: Optional[str] = None) -> None:
+                          series_label: Optional[str] = None,
+                          ink: str = "light") -> None:
     """Keep the day's feed card so its story twin can reuse verse and background.
 
     Instagram's Content Publishing API cannot re-share a feed post to a story —
@@ -257,6 +549,11 @@ def _remember_todays_post(verse: Verse, bg: Image.Image, set_id: Optional[str],
                 "set_id": set_id,
                 "series_label": series_label,
                 "bg_path": bg_path,
+                # The twin must compose with the SAME ink. This background was
+                # generated for one polarity; veiling a high-key frame in black
+                # to carry white type would both look wrong and very likely fail
+                # the contrast gate, costing the twin for no reason.
+                "ink": ink,
             }, fh)
     except (OSError, ValueError) as exc:
         logger.warning(f"could not persist today's feed card: {exc}")
@@ -614,16 +911,41 @@ def _workflow(prompt: str, width: int, height: int, seed: int, ckpt: str,
 
 
 def generate_background(kind: str = "post", subject: Optional[str] = None,
-                        seed: Optional[int] = None, timeout: int = 300) -> Optional[Image.Image]:
+                        seed: Optional[int] = None, timeout: int = 300,
+                        look: Optional[dict] = None) -> Optional[Image.Image]:
+    """One background image. See generate_background_tagged for the metadata."""
+    img, _meta = generate_background_tagged(kind=kind, subject=subject, seed=seed,
+                                            timeout=timeout, look=look)
+    return img
+
+
+def generate_background_tagged(kind: str = "post", subject: Optional[str] = None,
+                               seed: Optional[int] = None, timeout: int = 300,
+                               look: Optional[dict] = None) -> tuple:
+    """(image, meta) — meta carries what the variety gate needs to compare.
+
+    Split from generate_background so every existing caller keeps its plain
+    Image return, while create_card can see which subject and look it got and
+    refuse a card that repeats the recent feed.
+    """
     base = _comfy_url()
     width, height = SDXL_BUCKET.get(kind, SDXL_BUCKET["post"])
     hires = hires_size((width, height), ASPECTS.get(kind, ASPECTS["post"]))
-    subject = subject or random.choice(background_subjects())
-    prompt = f"{subject}, {style_suffix()}"
+    # Rotation is only consulted when the caller has not pinned a value. A
+    # pinned subject (the story twin, a series run, brand_footage's cache key)
+    # must stay pinned, and recording it as "used" would corrupt the LRU with
+    # picks it never made.
+    subject = subject or choose_background_subject()
+    look = look if look is not None else choose_look()
+    prompt = f"{subject}, {style_for(look)}"
     seed = seed if seed is not None else random.randint(1, 2**31 - 1)
     ckpt = str(_cfg("comfyui_checkpoint", "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"))
+    meta = {"subject": subject, "look": (look or {}).get("name", ""),
+            "subject_class": subject_class(subject), "seed": seed,
+            "ink": (look or {}).get("ink", "light")}
 
-    logger.info(f"generating background ({kind} {width}x{height} -> {hires[0]}x{hires[1]}): {subject}")
+    logger.info(f"generating background ({kind} {width}x{height} -> "
+                f"{hires[0]}x{hires[1]}): {subject} [{meta['look'] or 'default'}]")
     try:
         resp = requests.post(f"{base}/prompt",
                              json={"prompt": _workflow(prompt, width, height, seed, ckpt, hires)},
@@ -632,7 +954,7 @@ def generate_background(kind: str = "post", subject: Optional[str] = None,
         prompt_id = resp.json()["prompt_id"]
     except (requests.exceptions.RequestException, KeyError, ValueError) as exc:
         logger.error(f"ComfyUI submit failed: {exc}")
-        return None
+        return None, meta
 
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -651,12 +973,12 @@ def generate_background(kind: str = "post", subject: Optional[str] = None,
                         "type": img.get("type", "output"),
                     })
                     raw = requests.get(f"{base}/view?{q}", timeout=60).content
-                    return Image.open(io.BytesIO(raw)).convert("RGB")
+                    return Image.open(io.BytesIO(raw)).convert("RGB"), meta
             logger.error("ComfyUI finished but produced no image")
-            return None
+            return None, meta
         time.sleep(2)
     logger.error(f"ComfyUI timed out after {timeout}s")
-    return None
+    return None, meta
 
 
 # --- 4. composition ----------------------------------------------------------
@@ -716,8 +1038,20 @@ def _draw_tracked(draw, xy, text: str, font, fill, tracking: float):
 def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
                  out_path: Optional[str] = None, point_at_post: bool = False,
                  series_label: Optional[str] = None,
-                 part_of: Optional[tuple] = None) -> str:
+                 part_of: Optional[tuple] = None, ink: str = "light") -> str:
+    """One finished card. `ink` is the colour of the TYPE, not of the card.
+
+    "light" is white type over a darkened photograph — the only card this
+    pipeline could make until now, and the reason every card it ever published
+    measures dark: the scrim darkens adaptively to protect white type, so a
+    high-key background composes to a dark card regardless. "dark" is the other
+    polarity, DARK_INK over a lightened photograph, which is what actually lets
+    a light card exist. See quality.py for the maths; the two are not
+    symmetric.
+    """
     w, h = ASPECTS.get(kind, ASPECTS["post"])
+    dark_ink = ink == "dark"
+    ink_rgb = quality.DARK_INK if dark_ink else (255, 255, 255)
     img = _cover(bg, w, h)
 
     # Keep the photograph a photograph. Enough softening that fine detail stops
@@ -780,10 +1114,12 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
         my += line_h
 
     lum = quality.luminance_under(img, mask)
-    alpha = quality.alpha_for_target(lum) if lum is not None else 110
-    # Floor keeps type separated from texture even over an already-dark photo;
-    # ceiling stops the photograph being drowned.
-    alpha = max(70, min(205, alpha))
+    alpha = quality.alpha_for_target(lum, ink=ink) if lum is not None else 110
+    # Floor keeps type separated from texture even over an already-suitable
+    # photo; ceiling stops the photograph being drowned. The light-ground
+    # ceiling is higher: white veiling reads as haze and stays photographic
+    # further up than black veiling, which goes to mud.
+    alpha = max(70, min(225 if dark_ink else 205, alpha))
 
     # The scrim is anchored to the text block and falls off within roughly one
     # block-height either side, so the top and bottom of the frame keep their
@@ -800,7 +1136,8 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
     base = alpha * 0.5
     boost = alpha - base
     feather = max(int(h * 0.28), int(block_h * 0.8))
-    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    veil = (255, 255, 255) if dark_ink else (0, 0, 0)
+    overlay = Image.new("RGBA", (w, h), (*veil, 0))
     od = ImageDraw.Draw(overlay)
     for y in range(h):
         if top <= y <= bottom:
@@ -810,15 +1147,19 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
             ease = 1.0 - (3 * t * t - 2 * t * t * t)   # smoothstep
         a = int(base + boost * ease)
         if a > 0:
-            od.line([(0, y), (w, y)], fill=(0, 0, 0, a))
+            od.line([(0, y), (w, y)], fill=(*veil, a))
     img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
 
     # Gentle vignette, applied separately as a multiply so it adds depth at the
-    # corners without lifting the whole frame.
+    # corners without lifting the whole frame. On a light card it is inverted:
+    # darkening the corners of an airy frame is exactly the move that would drag
+    # it back toward the one look this whole change exists to escape.
     vign = Image.new("L", (w, h), 0)
     ImageDraw.Draw(vign).ellipse((-w * 0.30, -h * 0.20, w * 1.30, h * 1.20), fill=255)
-    vign = vign.filter(ImageFilter.GaussianBlur(radius=w * 0.10)).point(lambda v: 200 + v * 55 // 255)
-    img = Image.composite(img, Image.new("RGB", (w, h), (0, 0, 0)), vign)
+    vign = vign.filter(ImageFilter.GaussianBlur(radius=w * 0.10)).point(
+        lambda v: (228 + v * 27 // 255) if dark_ink else (200 + v * 55 // 255))
+    img = Image.composite(img, Image.new("RGB", (w, h), (255, 255, 255) if dark_ink
+                                         else (0, 0, 0)), vign)
 
     # Measure now: once the white type is drawn, sampling the glyph mask would
     # be reading the letters themselves, not the background behind them.
@@ -829,14 +1170,14 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
     # Verse — centred, generous leading.
     y = block_top
     for line in lines:
-        ty.draw_centered(draw, w, y, line, font_v, (255, 255, 255))
+        ty.draw_centered(draw, w, y, line, font_v, ink_rgb)
         y += line_h
 
     # Hairline rule, then the reference in tracked small caps.
     rule_y = y + int(rule_gap * 0.42)
     rule_w = int(w * 0.10)
     draw.line([((w - rule_w) / 2, rule_y), ((w + rule_w) / 2, rule_y)],
-              fill=(255, 255, 255, 120), width=max(1, int(h * 0.0012)))
+              fill=(*ink_rgb, 120), width=max(1, int(h * 0.0012)))
 
     # The reference always states the verses ON THIS CARD, and when a passage is
     # split the card says which part it is — so a reader can tell at a glance
@@ -845,9 +1186,9 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
     if part_of and part_of[1] > 1:
         ref_text += f"  ·  {part_of[0]} of {part_of[1]}"
     ty.draw_centered(draw, w, rule_y + int(rule_gap * 0.42), ref_text.upper(), font_r,
-                     (255, 255, 255, 235), ty.TRACK_MICRO)
+                     (*ink_rgb, 235), ty.TRACK_MICRO)
 
-    ok, reason = quality.check_card(final_lum)
+    ok, reason = quality.check_card(final_lum, ink)
     quality.log_result("card", ok, reason)
     if not ok:
         return ""   # caller regenerates with a different background
@@ -860,12 +1201,12 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
     f_mark = ty.font(ty.SERIF, mark_size, "Light")
     mark_y = int(h * (0.915 if kind == "post" else 0.845))
     ty.draw_centered(draw, w, mark_y, _carousel.wordmark(), f_mark,
-                     (255, 255, 255, 190), ty.TRACK_WORDMARK)
+                     (*ink_rgb, 190), ty.TRACK_WORDMARK)
 
     if point_at_post and kind == "story":
         f_ptr = ty.font(ty.SANS, int(w * 0.016), "Medium")
         ty.draw_centered(draw, w, int(h * 0.885), "NEW POST TODAY  ·  TAP THROUGH",
-                         f_ptr, (255, 255, 255, 225), ty.TRACK_MICRO)
+                         f_ptr, (*ink_rgb, 225), ty.TRACK_MICRO)
 
     # Series line, above the verse block: it is a label, not part of the
     # scripture, and putting it at the top stops it reading as a citation.
@@ -874,7 +1215,7 @@ def compose_card(bg: Image.Image, verse: Verse, kind: str = "post",
         f_series = ty.font(ty.SANS, int(w * 0.0155), "Medium")
         series_y = int(h * (0.085 if kind == "post" else 0.145))
         ty.draw_centered(draw, w, series_y, series_label.upper(), f_series,
-                         (255, 255, 255, 170), ty.TRACK_MICRO)
+                         (*ink_rgb, 170), ty.TRACK_MICRO)
 
     out_dir = "/influencer-automation-2.0/storage/verse_cards"
     os.makedirs(out_dir, exist_ok=True)
@@ -896,6 +1237,24 @@ def build_caption(verse: Verse, set_id: Optional[str] = None) -> tuple[str, str]
     from app.services import hashtags
 
     return hashtags.build_caption(verse.text, verse.reference, verse.translation, set_id)
+
+
+def _discard(paths: list) -> None:
+    """Remove cards this run wrote and then decided not to use.
+
+    compose_card writes its JPEG before returning, and the variety check can
+    only run on the composed card — so a rejected candidate has already landed
+    in the published-cards directory. Leaving it there would both waste disk and
+    corrupt feed_variety_report.py, which measures that directory to decide what
+    the account has been publishing.
+
+    Only ever called with paths this function created moments earlier.
+    """
+    for p in paths:
+        try:
+            os.remove(p)
+        except OSError as exc:  # noqa: BLE001 - a leftover file is not fatal
+            logger.debug(f"could not remove rejected card {p}: {exc}")
 
 
 def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = None,
@@ -928,10 +1287,24 @@ def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = No
 
     # A rejected card means the background was too bright under the type even
     # after darkening; a different background is cheaper than a bad post.
+    #
+    # Two gates run here and they are NOT equal. Contrast is a floor: a card
+    # that fails it is illegible and is never published. Variety is a
+    # preference: a card that repeats the recent feed is worth less than a
+    # different one but far more than a missed slot, so a repetitive card is
+    # kept as a fallback and published if the pool will not do better. See
+    # quality.check_variety.
+    from app.services import quality, rotation
+
+    register_state = _rotation_path("used_registers.json")
+    history = rotation.load_history(register_state)
+
     paths: list[str] = []
     bg = None
-    for attempt in range(1, 4):
-        bg = generate_background(kind=kind, subject=subject)
+    register: dict = {}
+    fallback: Optional[tuple] = None   # (paths, bg, register, reason)
+    for attempt in range(1, 5):
+        bg, meta = generate_background_tagged(kind=kind, subject=subject)
         if bg is None:
             return None
         # Only the twin points at the feed post — see create_story_from_todays_post.
@@ -941,19 +1314,50 @@ def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = No
         # morning with no post. The twin cannot drift that way: it is built from
         # the card it points at.
         paths = []
+        ink = meta.get("ink", "light")
         for i, part in enumerate(parts, start=1):
             p = compose_card(bg, part, kind=kind, series_label=series_label,
-                             part_of=(i, total))
+                             part_of=(i, total), ink=ink)
             if not p:
                 paths = []
                 break
             paths.append(p)
         if paths:
-            break
-        logger.warning(f"card rejected on contrast; regenerating background ({attempt}/3)")
+            # Measured on the COMPOSED card, not on `bg`. The scrim in
+            # compose_card darkens adaptively to hit the contrast target, so a
+            # bright background becomes a dark card — measuring the raw
+            # background would score variety the audience never sees.
+            try:
+                composed = Image.open(paths[0])
+            except OSError:
+                composed = bg
+            register = quality.register_of(composed, meta)
+            varied, why = quality.check_variety(register, history)
+            quality.log_result(f"variety/{kind}", varied, why)
+            if varied:
+                if fallback is not None:
+                    _discard(fallback[0])   # a better card won; drop the spare
+                break
+            if fallback is None:
+                fallback = (paths, bg, register, why)
+            else:
+                _discard(paths)
+            paths = []
+            logger.info(f"card repeats the recent feed; trying another "
+                        f"background ({attempt}/4)")
+            continue
+        logger.warning(f"card rejected on contrast; regenerating background ({attempt}/4)")
+    if not paths and fallback is not None:
+        # Every candidate repeated the feed. Publishing the first legible one is
+        # the lesser failure — see the note on the loop above.
+        paths, bg, register, why = fallback
+        logger.warning(f"publishing a repetitive card, no varied background "
+                       f"available after 4 tries: {why}")
     if not paths:
-        logger.error("could not produce a legible card after 3 backgrounds")
+        logger.error("could not produce a legible card after 4 backgrounds")
         return None
+    if register:
+        rotation.remember(register_state, register, keep=200)
     _remember_reference(verse.reference)
     caption, set_id = build_caption(verse, hashtag_set)
     if series_label:
@@ -961,7 +1365,8 @@ def create_card(kind: str = "post", theme: str = "", subject: Optional[str] = No
         # the series name leads rather than trailing after the verse.
         caption = f"{series_label}\n\n{caption}"
     if kind == "post" and bg is not None:
-        _remember_todays_post(verse, bg, set_id, series_label)
+        _remember_todays_post(verse, bg, set_id, series_label,
+                              ink=register.get("ink", "light"))
     return {"path": paths[0], "paths": paths, "parts": parts,
             "verse": verse, "caption": caption, "kind": kind,
             "set_id": set_id, "series_label": series_label}
@@ -993,7 +1398,8 @@ def create_story_from_todays_post() -> Optional[dict]:
     # it from the same verse and background exists to prevent.
     series_label = record.get("series_label") or None
     path = compose_card(bg, verse, kind="story", point_at_post=True,
-                        series_label=series_label)
+                        series_label=series_label,
+                        ink=record.get("ink", "light"))
     if not path:
         logger.warning("story twin rejected on contrast; falling back to a fresh story")
         return None
