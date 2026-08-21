@@ -42,6 +42,13 @@ class TestPackIsANoOp(unittest.TestCase):
                          verse_card.BACKGROUND_SUBJECTS)
         self.assertEqual(verse_card.style_suffix(), verse_card.STYLE_SUFFIX)
         self.assertEqual(verse_card.negative_prompt(), verse_card.NEGATIVE_PROMPT)
+        # The looks carry `ink`, which decides whether a card is light type on a
+        # darkened photo or dark type on a lightened one. A pack that shipped
+        # the looks WITHOUT it would silently override the module and put the
+        # account back to every-card-dark, with nothing failing.
+        self.assertEqual(verse_card.style_looks(), verse_card.STYLE_LOOKS)
+        self.assertEqual(verse_card.style_core(), verse_card.STYLE_CORE)
+        self.assertTrue(all("ink" in look for look in verse_card.style_looks()))
 
     def test_series_match(self):
         self.assertEqual(series.all_series(), series.SERIES)

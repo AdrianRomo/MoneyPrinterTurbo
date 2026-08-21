@@ -117,29 +117,81 @@ def luminance_under(img: Image.Image, mask: Image.Image) -> Optional[float]:
     return (total / count) / 255.0
 
 
-def contrast_ratio(bg_luminance: float) -> float:
-    return (1.0 + 0.05) / (max(0.0, bg_luminance) + 0.05)
+# --- ink polarity -------------------------------------------------------------
+#
+# Everything above assumes WHITE type over a darkened photograph, because that
+# was the only card this pipeline could make. That single assumption is why the
+# feed collapsed on the light axis: the scrim darkens adaptively to guarantee
+# white type stays legible, so a high-key background becomes a dark card and
+# every card the account has ever published measures "dark". Widening the prompt
+# vocabulary cannot fix that — measured end to end, six backgrounds spanning
+# light, mid and dark all composed to "dark".
+#
+# The fix is the other polarity: DARK type over a lightened photograph. It needs
+# its own contrast maths, because the WCAG ratio is not symmetric.
+DARK_INK = (28, 26, 24)
+# Relative luminance of DARK_INK, sRGB. Low enough that the ratio is generous
+# and the gate is dominated by how light the background gets, not by the ink.
+DARK_INK_LUM = 0.0116
+
+# Dark type on a light ground reaches a given ratio far more easily than white
+# type on a dark one, so a 4:1 target would pass a card that is merely mid-grey
+# and defeat the point. These are set so a "dark ink" card is genuinely LIGHT.
+TARGET_RATIO_DARK = 9.0    # -> background luminance about 0.50
+MIN_RATIO_DARK = 5.5       # -> about 0.29, the floor below which it reads muddy
 
 
-def alpha_for_target(bg_luminance: float, target_ratio: float = TARGET_RATIO) -> int:
-    """Black-overlay alpha needed to bring bg luminance down to the target.
+def contrast_ratio(bg_luminance: float, ink: str = "light") -> float:
+    """WCAG-style ratio between the type and what is behind it.
 
-    Darkening by alpha a scales luminance by (1 - a/255), so the required alpha
-    is exact — no iteration needed.
+    `ink` is the colour of the TYPE: "light" is the white type this pipeline
+    started with, "dark" is DARK_INK on a lightened ground.
     """
+    bg = max(0.0, bg_luminance)
+    if ink == "dark":
+        return (bg + 0.05) / (DARK_INK_LUM + 0.05)
+    return (1.0 + 0.05) / (bg + 0.05)
+
+
+def target_ratio_for(ink: str = "light") -> float:
+    return TARGET_RATIO_DARK if ink == "dark" else TARGET_RATIO
+
+
+def min_ratio_for(ink: str = "light") -> float:
+    return MIN_RATIO_DARK if ink == "dark" else MIN_RATIO
+
+
+def alpha_for_target(bg_luminance: float, target_ratio: Optional[float] = None,
+                     ink: str = "light") -> int:
+    """Overlay alpha needed to bring the background to the target luminance.
+
+    For light ink the overlay is BLACK and darkening by alpha a scales luminance
+    by (1 - a/255). For dark ink the overlay is WHITE and lightening by a moves
+    luminance to L + (1 - L) * a/255. Both are exact — no iteration needed.
+    """
+    if target_ratio is None:
+        target_ratio = target_ratio_for(ink)
+    if ink == "dark":
+        target_l = target_ratio * (DARK_INK_LUM + 0.05) - 0.05
+        if bg_luminance >= target_l:
+            return 0
+        if bg_luminance >= 1.0:
+            return 0
+        return int(255 * (target_l - bg_luminance) / (1.0 - bg_luminance))
     target_l = (1.05 / target_ratio) - 0.05
     if bg_luminance <= target_l or bg_luminance <= 0:
         return 0
     return int(255 * (1 - target_l / bg_luminance))
 
 
-def check_card(bg_luminance: Optional[float]) -> tuple[bool, str]:
+def check_card(bg_luminance: Optional[float], ink: str = "light") -> tuple[bool, str]:
     if bg_luminance is None:
         return True, "no glyph sample (not enough text pixels) — allowed"
-    ratio = contrast_ratio(bg_luminance)
-    if ratio < MIN_RATIO:
-        return False, f"text contrast {ratio:.1f}:1 below floor {MIN_RATIO}:1"
-    return True, f"contrast {ratio:.1f}:1"
+    ratio = contrast_ratio(bg_luminance, ink)
+    floor = min_ratio_for(ink)
+    if ratio < floor:
+        return False, f"{ink}-ink contrast {ratio:.1f}:1 below floor {floor}:1"
+    return True, f"{ink}-ink contrast {ratio:.1f}:1"
 
 
 def check_carousel(car: dict) -> tuple[bool, str]:
@@ -175,3 +227,115 @@ def check_carousel(car: dict) -> tuple[bool, str]:
 
 def log_result(label: str, ok: bool, reason: str) -> None:
     (logger.info if ok else logger.warning)(f"quality[{label}]: {'pass' if ok else 'REJECT'} — {reason}")
+
+
+# --- variety ------------------------------------------------------------------
+#
+# THE GAP THIS CLOSES. Every other gate in this module measures ONE image and
+# asks "is this good?". None of them ever asked "is this DIFFERENT from the last
+# few?", and nothing else in the pipeline did either. So the account published
+# 41 cards that each passed every gate individually and, taken together, looked
+# like one photograph taken 41 times:
+#
+#     saturation   never above 33/100    (100% of cards read as "muted")
+#     lightness    never above 54/100    (nothing bright, ever)
+#     hue family   66% in two families   (amber and blue/teal carried the feed)
+#
+# A feed is consumed as a grid, not as single posts. Variety is therefore a
+# property of the SEQUENCE, and it needs a gate that can see more than one card.
+#
+# THIS GATE IS A PREFERENCE, NOT A FLOOR — deliberately, and unlike every other
+# gate here. The contrast gate protects legibility, so it hard-fails and the
+# card is regenerated or abandoned. Repetition is a taste failure: a repetitive
+# post is worth much more than a missed slot on an unattended account. So
+# create_card prefers a candidate that passes this and publishes the best
+# contrast-passing candidate anyway when the pool will not yield one. Never
+# promote this to a hard floor without giving the caller somewhere to fall back.
+
+VARIETY_WINDOW = 8      # a 3x3 profile grid is what a visitor actually judges
+CLASS_WINDOW = 3        # ...and adjacent posts are what a follower scrolls
+LOOK_WINDOW = 3
+
+
+def palette_bucket(img: Image.Image) -> str:
+    """A coarse "what does this look like" label: hue family / light / colour.
+
+    Deliberately coarse. The question is not what colour the image is, it is
+    whether a reader would call this the same kind of picture as the last one,
+    and at thumbnail size that judgement has about this many levels.
+    """
+    import colorsys
+
+    small = img.convert("RGB").resize((32, 32), Image.LANCZOS)
+    px = list(small.getdata())
+    n = len(px)
+    r = sum(p[0] for p in px) / n
+    g = sum(p[1] for p in px) / n
+    b = sum(p[2] for p in px) / n
+    h, light, sat = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+    h *= 360
+    light *= 100
+    sat *= 100
+
+    family = ("warm" if (h < 70 or h > 330) else
+              "green" if h < 170 else
+              "blue" if h < 260 else "violet")
+    band = "dark" if light < 35 else "mid" if light < 62 else "light"
+    colour = "muted" if sat < 30 else "moderate" if sat < 55 else "vivid"
+    return f"{family}/{band}/{colour}"
+
+
+def register_of(img: Image.Image, meta: Optional[dict] = None) -> dict:
+    """The comparable fingerprint of a card: what it is OF, and what it looks like.
+
+    Subject class and look come from the generator (verse_card knows what it
+    asked for); the palette is measured from the pixels that came back, because
+    a prompt asking for "high-key airy" and a model returning something dark is
+    exactly the disagreement worth catching.
+    """
+    meta = meta or {}
+    return {
+        "subject_class": meta.get("subject_class", ""),
+        "look": meta.get("look", ""),
+        "palette": palette_bucket(img),
+        # Carried so the accepted card's polarity travels with it — the story
+        # twin has to compose in the same ink. check_variety ignores it: ink is
+        # a property of the look, so comparing it would double-count.
+        "ink": meta.get("ink", "light"),
+    }
+
+
+def check_variety(register: dict, recent: list) -> tuple[bool, str]:
+    """Is this card different enough from the ones just published?
+
+    `recent` is oldest-first, as rotation.load_history returns it.
+    """
+    if not register:
+        return True, "no register to compare"
+    window = list(recent)[-VARIETY_WINDOW:]
+    if not window:
+        return True, "nothing published yet"
+
+    key = (register.get("subject_class"), register.get("look"),
+           register.get("palette"))
+    for prior in window:
+        if not isinstance(prior, dict):
+            continue
+        if (prior.get("subject_class"), prior.get("look"),
+                prior.get("palette")) == key:
+            return False, (f"identical register to a card in the last "
+                           f"{len(window)}: {key[0]}/{key[1]}/{key[2]}")
+
+    recent_classes = [p.get("subject_class") for p in window[-CLASS_WINDOW:]
+                      if isinstance(p, dict)]
+    if register.get("subject_class") and register["subject_class"] in recent_classes:
+        return False, (f"subject class {register['subject_class']!r} used within "
+                       f"the last {CLASS_WINDOW} cards")
+
+    recent_looks = [p.get("look") for p in window[-LOOK_WINDOW:]
+                    if isinstance(p, dict)]
+    if register.get("look") and register["look"] in recent_looks:
+        return False, (f"look {register['look']!r} used within the last "
+                       f"{LOOK_WINDOW} cards")
+
+    return True, f"{key[0]}/{key[1]}/{key[2]}"

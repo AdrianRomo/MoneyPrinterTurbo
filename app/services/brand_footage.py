@@ -120,21 +120,31 @@ def generate_frame(term: str, index: int = 0, save_dir: str = "",
                    avoid: Optional[set] = None) -> Optional[str]:
     """Generate one on-brand still and return its local path (or None).
 
-    Cached by subject: a script expands each concept into several near-identical
-    terms ("selfie capture", "Timothy selfie capture", "God selfie capture"),
-    and those collapse onto the same allowlisted subject. Regenerating per term
-    would cost a diffusion pass each for the same picture.
+    Cached by subject AND look: a script expands each concept into several
+    near-identical terms ("selfie capture", "Timothy selfie capture", "God
+    selfie capture"), and those collapse onto the same allowlisted subject.
+    Regenerating per term would cost a diffusion pass each for the same picture.
+
+    The look belongs in the key because without it the cache defeats rotation
+    outright: the FIRST look a subject was ever generated under became that
+    subject's permanent appearance, which is how the Reel path ended up reusing
+    four brand stills. Keying on both keeps the per-term saving — the thing the
+    cache exists for — while letting the same subject come back later under
+    different light.
     """
     subject = subject_for(term, index, avoid)
+    look = verse_card.choose_look()
+    look_name = str(look.get("name", "")) if isinstance(look, dict) else ""
     save_dir = save_dir or utils.storage_dir("cache_images", create=True)
     os.makedirs(save_dir, exist_ok=True)
-    path = os.path.join(save_dir, f"brand-{utils.md5(f'{subject}|{index}')}.jpg")
+    path = os.path.join(save_dir,
+                        f"brand-{utils.md5(f'{subject}|{index}|{look_name}')}.jpg")
     if os.path.exists(path) and os.path.getsize(path) > 0:
-        logger.info(f"reusing brand footage for {term!r}: {subject}")
+        logger.info(f"reusing brand footage for {term!r}: {subject} [{look_name}]")
         return path
     # 9:16 bucket — the same native SDXL size the story cards use, so the
     # composition holds instead of duplicating subjects at an off-bucket size.
-    img = verse_card.generate_background(kind="story", subject=subject)
+    img = verse_card.generate_background(kind="story", subject=subject, look=look)
     if img is None:
         return None
     try:

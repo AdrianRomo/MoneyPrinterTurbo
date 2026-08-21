@@ -50,6 +50,117 @@ verse_card:
   - a quiet forest floor covered in fallen leaves
   - moonlight over a calm sea
   - first snow settling on a quiet field
+  - close detail of weathered olive wood grain
+  - cracked dry earth in soft directional light
+  - a single wheat stalk against a plain background
+  - raindrops beaded on a green leaf
+  - frost crystals forming on a dark surface
+  - close detail of lichen on grey stone
+  - the surface of still water disturbed by one drop
+  - sand ripples in low raking light
+  - close detail of tree bark with deep fissures
+  - a feather resting on dark stone
+  - pale sea glass on wet sand
+  - the underside of a fern frond backlit
+  - smooth river pebbles in shallow clear water
+  - close detail of woven linen cloth
+  - salt crystals on a dark tidal rock
+  - moss growing in the crevice of a boulder
+  - a spider web strung with morning dew
+  - close detail of an unopened flower bud
+  - wind-carved snow crust in blue shade
+  - the ridged surface of a seashell
+  - towering cumulus clouds in clear afternoon light
+  - a break of blue between heavy grey clouds
+  - high cirrus streaks across a pale sky
+  - the last band of colour after sunset
+  - a rainbow forming against dark storm cloud
+  - mackerel sky at first light
+  - rain falling from a distant cloud over open ground
+  - clear night sky thick with stars
+  - the milky way over an empty horizon
+  - a crescent moon in deep blue twilight
+  - sunbeams fanning through a gap in cloud
+  - fog bank rolling in low over water
+  - heat haze rising from a flat plain
+  - a single cloud in an otherwise empty sky
+  - the blue hour over a silent landscape
+  - light falling through a tall arched window onto a stone floor
+  - a worn stone staircase in soft shade
+  - sunlight moving across a plain plaster wall
+  - an open wooden door onto bright daylight
+  - a narrow alley of pale stone at midday
+  - rough-hewn stone wall in raking evening light
+  - a quiet cloister walkway in deep shadow
+  - weathered shutters on a sunlit wall
+  - a simple wooden roof beam against white plaster
+  - a stone well head in an empty courtyard
+  - terracotta rooftops under a wide sky
+  - an old stone bridge over still water
+  - an open book on a plain wooden table in window light
+  - a clay cup beside a shuttered window
+  - a loaf of bread on a bare wooden board
+  - olive branches laid on rough linen
+  - a beeswax candle burning in a dim room
+  - a small brass bell on a stone ledge
+  - a bowl of water reflecting a window
+  - dried lavender tied with plain twine
+  - a fishing net folded on a harbour wall
+  - an oil lamp unlit on a stone sill
+  - a handful of grain spilling from a cloth sack
+  - a shepherd's staff leaning against a wall
+  - a waterfall through green moss-covered rock
+  - a slow river bend under overhanging trees
+  - clear shallows over pale sand
+  - surf breaking white on dark rocks
+  - a mountain tarn perfectly still at dawn
+  - reeds standing in shallow marsh water
+  - a frozen lake surface under low sun
+  - spray rising at the base of a fall
+  - a single oak alone in an open field
+  - bluebells carpeting a woodland floor
+  - an avenue of trees in full summer leaf
+  - a hedgerow heavy with autumn berries
+  - terraced vineyards on a warm hillside
+  - a lavender field in rows to the horizon
+  - bare winter trees against a white sky
+  - a stubble field after harvest
+  - pine forest under deep snow
+  - a clearing lit by a single shaft of sun
+  - a jagged ridge line above the cloud layer
+  - red rock canyon walls in warm reflected light
+  - a glacier face in cold blue shadow
+  - scree slopes under thin high cloud
+  - salt flats mirroring an empty sky
+  - a lone mesa on a flat desert plain
+  - icicles hanging from a dark rock overhang
+  - windswept dunes with a sharp shadow edge
+  style_core: photographic, natural light, serene, minimal composition, negative space, high detail
+  style_looks:
+  - name: muted-warm
+    ink: light
+    suffix: shallow depth of field, muted warm tones, cinematic, 35mm
+  - name: high-key-airy
+    ink: dark
+    suffix: high-key, bright airy exposure, pale delicate palette, gentle haze, 50mm
+  - name: low-key-dramatic
+    ink: light
+    suffix: low-key, deep shadow, single directional light source, rich contrast, 85mm
+  - name: backlit-golden
+    ink: light
+    suffix: strong backlight, golden hour rim light, warm glow, atmospheric, 35mm
+  - name: overcast-cool
+    ink: dark
+    suffix: flat overcast light, cool blue-grey palette, soft even tone, 50mm
+  - name: clear-vivid
+    ink: dark
+    suffix: clear bright daylight, saturated natural colour, crisp, deep blue sky, 24mm
+  - name: monochrome-quiet
+    ink: dark
+    suffix: near-monochrome, tonal greyscale palette, fine film grain, 50mm
+  - name: blue-hour
+    ink: light
+    suffix: blue hour, deep twilight, cool indigo palette, soft ambient light, 35mm
   style_suffix: photographic, natural light, shallow depth of field, muted warm tones, cinematic, serene,
     minimal composition, negative space, 35mm, high detail
   negative_prompt: people, person, human, face, portrait, jesus, christ, saint, angel, figure, crowd,
