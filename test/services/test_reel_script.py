@@ -38,11 +38,15 @@ class TestFlagAndBudget(ReelScriptTestCase):
 
     def test_unusable_config_falls_back_instead_of_raising(self):
         # A typo in config.toml must not take the script path down with it.
+        # Derived from the constant rather than hardcoded: this asserts the
+        # FALLBACK, and pinning the number meant retuning the default duration
+        # broke a test about error handling.
+        fallback = int(reel_script.DEFAULT_TARGET_SECONDS * 18)
         config.app["script_target_seconds"] = "twenty"
         config.app["script_chars_per_second"] = 18
-        self.assertEqual(reel_script.char_budget(), 360)
+        self.assertEqual(reel_script.char_budget(), fallback)
         config.app["script_target_seconds"] = -5
-        self.assertEqual(reel_script.char_budget(), 360)
+        self.assertEqual(reel_script.char_budget(), fallback)
 
     def test_budget_never_collapses_to_a_fragment(self):
         config.app["script_target_seconds"] = 0.5

@@ -15,6 +15,7 @@ paths, secret-free artifacts).
 from __future__ import annotations
 
 import os
+import re
 from typing import List, Optional, Tuple
 
 from loguru import logger
@@ -74,6 +75,14 @@ def load_automation_settings() -> AutomationSettings:
         except (TypeError, ValueError):
             return default
 
+    def as_list(key, default):
+        value = _cfg(key, default)
+        if isinstance(value, str):
+            value = [part for part in re.split(r"[,\n]", value)]
+        if not isinstance(value, (list, tuple)):
+            return list(default)
+        return [str(item).strip() for item in value if str(item).strip()]
+
     try:
         mode = AutomationMode(str(_cfg("article_automation_mode", "assisted")).lower())
     except ValueError:
@@ -102,6 +111,7 @@ def load_automation_settings() -> AutomationSettings:
         require_review_for_sensitive_topics=as_bool(
             "article_require_review_for_sensitive_topics", True
         ),
+        sensitive_category_allowlist=as_list("article_sensitive_category_allowlist", []),
         add_illustrative_label=as_bool("article_add_illustrative_label", True),
         max_generations_per_day=as_int("article_max_generations_per_day", 20),
         max_publications_per_day=as_int("article_max_publications_per_day", 10),
@@ -113,6 +123,39 @@ def load_automation_settings() -> AutomationSettings:
 # ---------------------------------------------------------------------------
 
 _RISK_ORDER = {RiskLevel.low: 0, RiskLevel.medium: 1, RiskLevel.high: 2}
+
+
+def gating_categories(
+    categories: Optional[List[str]], settings: AutomationSettings
+) -> List[str]:
+    """The flagged categories that should still force human review.
+
+    A blanket "any sensitive category gates" is unusable on an account whose
+    whole subject is one of those categories. Measured over the first 200
+    assessments on the devotional account: 68% were flagged sensitive, and 84 of
+    those flags were the single word "religion" — so the gate could never open,
+    and 16 rendered videos were never published.
+
+    Allowlisting is deliberately per-CATEGORY rather than a switch, because
+    turning the check off entirely would also un-gate politics, grief, mental
+    health and marriage on the same account. Those are hazards here; religion is
+    the subject.
+
+    Matching is case- and separator-insensitive ("mental health" and
+    "mental_health" both appear in real assessor output), and an empty allowlist
+    keeps the original behaviour exactly.
+    """
+    if not categories:
+        return []
+    allowed = {_normalise_category(item) for item in settings.sensitive_category_allowlist}
+    if not allowed:
+        return [str(item) for item in categories]
+    return [str(item) for item in categories
+            if _normalise_category(item) not in allowed]
+
+
+def _normalise_category(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
 
 
 def should_generate(
@@ -577,7 +620,16 @@ def assess_and_generate(
     assessment = article_llm.assess_story(
         articles, query=query, audience=audience, language=language
     )
-    sensitive = sensitive or bool(assessment.sensitive_categories)
+    # Only categories that are NOT allowlisted for this account count as
+    # sensitive; see gating_categories(). On a devotional account "religion" is
+    # the subject, while "grief" or "politics" in the same list still gate.
+    gating = gating_categories(assessment.sensitive_categories, settings)
+    if assessment.sensitive_categories and not gating:
+        logger.info(
+            "sensitive categories all allowlisted for this account "
+            f"({', '.join(assessment.sensitive_categories)}); not gating on them"
+        )
+    sensitive = sensitive or bool(gating)
     independent_sources = article_ingestion.independent_domain_count(articles)
     minimum_sources = subscription.minimum_independent_sources if subscription else 1
     freshness_results = [
