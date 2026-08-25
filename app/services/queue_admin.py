@@ -51,8 +51,16 @@ FLUSHABLE_STATES = frozenset({"QUEUE", "DRAFT"})
 # retrying: 29 rapid deletes tripped it. This is slow on purpose — a flush is
 # rare and interactive, and taking a minute is cheaper than a half-flushed queue.
 DELETE_PAUSE_SECONDS = 1.5
-MAX_RETRIES = 6
+
+# Measured 2026-08-25: once tripped, the window did not reopen within ~8 minutes
+# of backoff, while GET kept returning 200 throughout — reads and writes are
+# limited separately, so "the API is up" says nothing about whether a delete
+# will land. The retry budget is therefore sized in TENS of minutes, and the
+# per-attempt wait is capped so doubling cannot overshoot into a single
+# half-hour sleep that looks like a hang.
+MAX_RETRIES = 12
 BACKOFF_START_SECONDS = 15
+BACKOFF_CAP_SECONDS = 180
 
 
 def _iso(value: datetime) -> str:
@@ -129,7 +137,7 @@ def delete_post(svc: PostizService, post_id: str) -> tuple[bool, str]:
             logger.warning(f"throttled deleting {post_id}; waiting {delay}s "
                            f"(attempt {attempt}/{MAX_RETRIES})")
             time.sleep(delay)
-            delay *= 2
+            delay = min(delay * 2, BACKOFF_CAP_SECONDS)
     return False, f"still throttled after {MAX_RETRIES} attempts"
 
 
