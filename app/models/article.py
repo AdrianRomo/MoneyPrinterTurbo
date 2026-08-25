@@ -430,6 +430,11 @@ class AutomationSettings(BaseModel):
     allow_single_source_stories: bool = True
     allow_unverified_developing_stories: bool = True
     require_review_for_sensitive_topics: bool = True
+    # Categories that are the account's SUBJECT rather than a hazard, and so do
+    # not by themselves require human review. Empty means "every flagged
+    # category gates", which is the safe default and was the behaviour before
+    # this field existed. See article_pipeline.gating_categories().
+    sensitive_category_allowlist: List[str] = Field(default_factory=list)
     add_illustrative_label: bool = True
     max_generations_per_day: int = 20
     max_publications_per_day: int = 10

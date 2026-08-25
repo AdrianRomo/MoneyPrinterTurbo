@@ -82,6 +82,25 @@ class TestWebuiBackgroundMusic(unittest.TestCase):
         source_select.set_value("elevenlabs").run()
         return app
 
+    # The BGM panel renders exactly these two errors (webui/Main.py).
+    BGM_ERROR_KEYS = ("Invalid Background Music", "Background Music Validation Failed")
+
+    def _bgm_errors(self, app, locale="en"):
+        """Errors the BGM panel owns, ignoring the rest of the page.
+
+        These assertions used to compare against EVERY st.error on the whole
+        app. That made a background-music test fail whenever an unrelated panel
+        reported something — which it now does: the Article Mode panel surfaces
+        live RSS poll failures from articles.db, so three "desiringgod.org"
+        errors and an auto-publish warning landed in the same list.
+
+        Scoping to the BGM messages keeps the assertion exact where it matters
+        (a missing OR duplicated BGM error still fails) without coupling this
+        test to every other panel in the WebUI.
+        """
+        owned = {self._translation(locale, key) for key in self.BGM_ERROR_KEYS}
+        return [item.value for item in app.error if item.value in owned]
+
     def _uploader(self, app):
         return self._widget_by_key(app.file_uploader, "custom_bgm_uploader")
 
@@ -111,7 +130,7 @@ class TestWebuiBackgroundMusic(unittest.TestCase):
                 ]
                 self.assertEqual([str(item.value) for item in app.exception], [])
                 self.assertEqual(
-                    [item.value for item in app.error],
+                    self._bgm_errors(app, locale),
                     [self._translation(locale, "Invalid Background Music")],
                 )
                 self.assertFalse(
@@ -140,7 +159,7 @@ class TestWebuiBackgroundMusic(unittest.TestCase):
                     self._volume_select(app).set_value(0.4).run()
 
                 self.assertEqual([str(item.value) for item in app.exception], [])
-                self.assertEqual([item.value for item in app.error], [])
+                self.assertEqual(self._bgm_errors(app, locale), [])
                 self.assertEqual(
                     [item.value for item in app.info if "valid.wav" in item.value],
                     [
@@ -162,7 +181,7 @@ class TestWebuiBackgroundMusic(unittest.TestCase):
 
         validation.assert_not_called()
         self.assertEqual([str(item.value) for item in app.exception], [])
-        self.assertEqual([item.value for item in app.error], [])
+        self.assertEqual(self._bgm_errors(app), [])
         self.assertFalse(any("deferred.wav" in item.value for item in app.info))
         self.assertEqual(len(app.get("audio")), 0)
 
@@ -173,7 +192,7 @@ class TestWebuiBackgroundMusic(unittest.TestCase):
 
         validation.assert_called_once()
         self.assertEqual([str(item.value) for item in app.exception], [])
-        self.assertEqual([item.value for item in app.error], [])
+        self.assertEqual(self._bgm_errors(app), [])
         self.assertTrue(any("deferred.wav" in item.value for item in app.info))
         self.assertEqual(len(app.get("audio")), 1)
 
@@ -192,7 +211,7 @@ class TestWebuiBackgroundMusic(unittest.TestCase):
 
                 self.assertEqual([str(item.value) for item in app.exception], [])
                 self.assertEqual(
-                    [item.value for item in app.error],
+                    self._bgm_errors(app, locale),
                     [
                         self._translation(
                             locale, "Background Music Validation Failed"

@@ -39,7 +39,18 @@ from app.config import config
 # keeps the budget honest for the voice actually in use — a faster read would
 # need a different number, which is why it is configurable.
 DEFAULT_CHARS_PER_SECOND = 18.0
-DEFAULT_TARGET_SECONDS = 20.0
+
+# 20.0 until 2026-08-25. The only narrated Reel this account ever published ran
+# 15.3 s and held an average 2.5 s of watch time — 16.3% completion, the worst
+# of any Reel measured, and Reels are ranked on completion. Quiet quote Reels
+# came down to 8 s for the same reason; narration needs more room than a static
+# sentence, not two and a half times more.
+#
+# 12 s buys ~216 characters at the rate above, which is a hook plus one idea.
+# That is the format's whole contract ("cut it to one idea" is already in the
+# prompt), so this is enforcing what the guidance already asked for rather than
+# trimming something that was being used.
+DEFAULT_TARGET_SECONDS = 12.0
 
 # Below this a "script" is a fragment, not a devotional. Guards against a
 # mis-typed config key silently producing one-sentence reels.

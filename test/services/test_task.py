@@ -541,10 +541,16 @@ class TestTaskService(unittest.TestCase):
         )
 
     def test_generate_terms_seeds_from_reference_article_entities(self):
+        # match_materials_to_script is explicit because VideoParams reads its
+        # DEFAULT from the live config.toml (_app_flag), where it is now true.
+        # The amount and ordering below are derived from this flag, so leaving
+        # it to the default made this test assert production configuration
+        # rather than the seeding behaviour it is named for.
         params = VideoParams(
             video_subject="Mars launch",
             video_script="",
             reference_source_url="https://news.example.com/mars",
+            match_materials_to_script=False,
         )
         reference = SimpleNamespace(title="NASA Mars update", text="NASA reached Mars.")
 
@@ -712,6 +718,11 @@ class TestTaskService(unittest.TestCase):
             video_script="Hello world.",
             subtitle_enabled=True,
         )
+        # correct() only runs when word-level cadence is OFF — with it on the
+        # skip is deliberate (correct() would merge the short cues back into
+        # sentence-long ones, which is what cadence exists to prevent). Config
+        # now enables cadence, so this asserted a branch it no longer reached.
+        # The cadence-on branch is pinned by the companion test below.
 
         def fake_whisper_create(audio_file, subtitle_file):
             Path(subtitle_file).write_text(
@@ -730,6 +741,7 @@ class TestTaskService(unittest.TestCase):
                     tm.subtitle, "create", side_effect=fake_whisper_create
                 ) as create,
                 patch.object(tm.subtitle, "correct") as correct,
+                patch.object(tm.subtitle_cadence, "enabled", return_value=False),
             ):
                 subtitle_path = tm.generate_subtitle(
                     task_id=task_id,
@@ -746,6 +758,55 @@ class TestTaskService(unittest.TestCase):
         correct.assert_called_once_with(
             subtitle_file=subtitle_path, video_script="Hello world."
         )
+
+    def test_generate_subtitle_skips_correct_when_cadence_is_enabled(self):
+        """correct() would undo word-level cadence, so it must not run.
+
+        The counterpart to the test above. correct() rewrites cues to match
+        whole script lines, merging the short word-level cues straight back
+        into sentence-long ones — which is exactly what cadence exists to
+        prevent. This branch had no coverage, which is why enabling cadence in
+        config silently turned the test above into a test of nothing.
+        """
+        task_id = "test-custom-audio-cadence-subtitle"
+        task_dir = utils.task_dir(task_id)
+        audio_file = os.path.join(task_dir, "custom-audio.mp3")
+        Path(audio_file).write_bytes(b"fake audio")
+        params = VideoParams(
+            video_subject="custom audio",
+            video_script="Hello world.",
+            subtitle_enabled=True,
+        )
+
+        def fake_whisper_create(audio_file, subtitle_file):
+            Path(subtitle_file).write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\nHello world.\n\n",
+                encoding="utf-8",
+            )
+
+        try:
+            with (
+                patch.object(
+                    tm.config, "app", dict(tm.config.app, subtitle_provider="whisper")
+                ),
+                patch.object(
+                    tm.subtitle, "create", side_effect=fake_whisper_create
+                ) as create,
+                patch.object(tm.subtitle, "correct") as correct,
+                patch.object(tm.subtitle_cadence, "enabled", return_value=True),
+            ):
+                subtitle_path = tm.generate_subtitle(
+                    task_id=task_id,
+                    params=params,
+                    video_script="Hello world.",
+                    sub_maker=None,
+                    audio_file=audio_file,
+                )
+        finally:
+            shutil.rmtree(task_dir, ignore_errors=True)
+
+        create.assert_called_once_with(audio_file=audio_file, subtitle_file=subtitle_path)
+        correct.assert_not_called()
 
     def test_generate_subtitle_skips_edge_provider_without_sub_maker(self):
         """

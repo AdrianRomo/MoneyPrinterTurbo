@@ -150,12 +150,24 @@ def test_worker_logs_are_available_without_streamlit_session_state():
     assert result == {"videos": ["/tmp/final-1.mp4"]}
     records = webui_task.get_task_logs(task_id)
     assert len(records) == 1
+    # The path prefix is deliberately loose. format_log_record() renders it
+    # relative to PROJECT_ROOT, and PROJECT_ROOT depends on where the package
+    # is rooted at runtime — while the recorded source path comes from the
+    # compiled bytecode. Run the suite on the host and then inside the
+    # container (which bind-mounts the repo at a different absolute path) and
+    # the cached .pyc still reports the host path, so the rendered prefix
+    # becomes "./../home/...". That is an artifact of where the file was
+    # compiled, not a logging defect, and pinning the exact prefix made this
+    # test fail for a reason it does not care about.
+    #
+    # What it does care about: one record, carrying timestamp, level, source
+    # location, function and message.
     assert re.fullmatch(
         r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \| INFO \| "
-        r'"\./test/services/test_webui_task\.py:\d+": logged_start '
+        r'"\S*test/services/test_webui_task\.py:\d+": logged_start '
         r"- unique background task log",
         records[0],
-    )
+    ), records[0]
 
 
 def test_generation_log_fragment_refreshes_within_half_a_second():

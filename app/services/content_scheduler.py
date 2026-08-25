@@ -57,6 +57,28 @@ from app.services.postiz import PostizService, _local_date
 # Revisit this once W3.1 attribution has reach broken down BY FORMAT. This is a
 # reasoned prior, and the whole point of measuring per-format reach is that it
 # stops being one.
+#
+# 2026-08-25 — REVISITED, and it is no longer a prior. Per-format reach over the
+# first 17 measured posts:
+#
+#     reel      n=8   mean reach 34.5   max 108
+#     carousel  n=3   mean reach  9.3   max  11
+#     post      n=4   mean reach  7.0   max   8
+#
+# So the last story slot goes too. A story reaches only existing followers, and
+# there are 47 of them; the "twin of the feed card, for early engagement
+# velocity" argument above is sound in general but was never measured here, and
+# at this follower count the velocity it buys rounds to nothing. It also costs
+# the one thing that IS scarce: stories never appear in /me/media, so every
+# story published is permanently invisible to the insights loop (it is what drove
+# the unmatched counter from 10 to 26 — see insights.py).
+#
+# Reels are deliberately NOT cut despite the drop in total volume: they are the
+# only format reaching anyone, and cutting the surface that works to "post less"
+# would be cargo-culting a good general rule past the point the data supports it.
+#
+# Restoring stories is one value: set story per_day back to 1 here AND in the
+# pack (packs/<name>/pack.yaml), or the pack silently wins.
 PLAN = {
     "post": {"per_day": 1},
     "carousel": {"per_day": 1},
@@ -68,7 +90,7 @@ PLAN = {
     # of the day would find it mostly in the past and roll to tomorrow — costing
     # a post while the ledger still looks fine. See _windows_for in postiz.py.
     "reel": {"per_day": 2},
-    "story": {"per_day": 1},
+    "story": {"per_day": 0},
 }
 
 STORY_THEMES = ["peace and rest", "trust in the everyday", "gratitude",

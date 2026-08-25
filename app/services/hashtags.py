@@ -22,9 +22,11 @@ searchable and matters more. Sets are kept deliberately small for that reason.
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import re
+import statistics
 from typing import Optional
 
 from loguru import logger
@@ -75,8 +77,22 @@ SCORE_WEIGHTS = {"reach": 1.0, "saved": 12.0, "shares": 20.0, "likes": 2.0, "com
 # too few: at a reach of 2-9 with zero saves and zero shares on every post so
 # far, the composite score is reach-only noise, and exploiting on two samples of
 # noise locks the rotation onto whichever set happened to get shown twice.
-MIN_SAMPLES = 5
+#
+# Five was still too few. Measured spread across the first 17 samples was reach
+# 6-108 — a single Reel carried 30% of all reach ever collected. A five-sample
+# mean drawn from that distribution is dominated by whether the outlier landed
+# in the set, so a threshold on sample COUNT alone cannot tell signal from luck
+# no matter where it is set. Count is necessary and not sufficient, hence
+# _is_separable() below.
+MIN_SAMPLES = 12
 EPSILON = 0.25       # fraction of posts that explore rather than exploit
+
+# How far the leader must stand clear of the runner-up, in combined standard
+# errors, before its lead is treated as real. 1.0 is deliberately permissive —
+# this is a hashtag rotation, not a drug trial, and the cost of exploring a
+# slightly worse set is one post. The cost of the alternative is what was
+# happening: the whole rotation collapsing onto one lucky sample forever.
+SEPARATION_SIGMAS = 1.0
 
 
 def _path(name: str) -> str:
@@ -105,14 +121,51 @@ def score_of(metrics: dict) -> float:
 
 
 def set_scores() -> dict[str, dict]:
-    """{set_id: {samples, mean_score}} built from collected insights."""
+    """{set_id: {samples, mean_score, stderr}} built from collected insights."""
     samples = _load("samples.json", [])
     grouped: dict[str, list[float]] = {}
     for s in samples:
         sid = s.get("set_id")
         if sid in _sets() and isinstance(s.get("metrics"), dict):
             grouped.setdefault(sid, []).append(score_of(s["metrics"]))
-    return {sid: {"samples": len(v), "mean_score": sum(v) / len(v)} for sid, v in grouped.items() if v}
+    return {
+        sid: {
+            "samples": len(v),
+            "mean_score": sum(v) / len(v),
+            # Standard error of the mean. One sample has no spread to speak of,
+            # so it reports infinite uncertainty rather than a confident zero —
+            # otherwise a single lucky post looks like a perfectly measured one.
+            "stderr": (statistics.stdev(v) / math.sqrt(len(v))) if len(v) > 1 else float("inf"),
+        }
+        for sid, v in grouped.items()
+        if v
+    }
+
+
+def _is_separable(eligible: dict[str, dict]) -> bool:
+    """True when the leader's lead is bigger than the noise around it.
+
+    Guards against the failure this account actually hit: reach that varies by
+    more than an order of magnitude between posts of the SAME set, so ranking
+    sets by mean is ranking them by which one caught an outlier.
+    """
+    if len(eligible) < 2:
+        return False
+    ranked = sorted(eligible.values(), key=lambda d: d["mean_score"], reverse=True)
+    best, runner_up = ranked[0], ranked[1]
+    lead = best["mean_score"] - runner_up["mean_score"]
+    spread = math.hypot(best["stderr"], runner_up["stderr"])
+    if not math.isfinite(spread):
+        # A single-sample set carries infinite uncertainty by construction, so
+        # nothing it is involved in can be called.
+        return False
+    if spread == 0:
+        # Both sets scored identically on every post they ran. There is no noise
+        # left to hide a real difference, so any lead at all is a real one —
+        # treating this as "not separable" would refuse to act on the cleanest
+        # evidence the selector can ever get.
+        return lead > 0
+    return lead >= SEPARATION_SIGMAS * spread
 
 
 def _sets() -> dict:
@@ -130,7 +183,7 @@ def choose_set(explicit: Optional[str] = None) -> str:
     scores = set_scores()
     eligible = {sid: d for sid, d in scores.items() if d["samples"] >= MIN_SAMPLES}
 
-    if eligible and random.random() > EPSILON:
+    if eligible and _is_separable(eligible) and random.random() > EPSILON:
         best = max(eligible, key=lambda s: eligible[s]["mean_score"])
         logger.info(
             f"hashtag set '{best}' chosen by reach "
@@ -147,7 +200,13 @@ def choose_set(explicit: Optional[str] = None) -> str:
     else:
         # recent is most-recent-last; the front of the list is the stalest.
         choice = next((s for s in recent if s in sets), random.choice(list(sets)))
-    logger.info(f"hashtag set '{choice}' chosen by rotation ({'no data yet' if not eligible else 'explore'})")
+    if not eligible:
+        why = "no data yet"
+    elif not _is_separable(eligible):
+        why = "no separable winner"
+    else:
+        why = "explore"
+    logger.info(f"hashtag set '{choice}' chosen by rotation ({why})")
     return choice
 
 
@@ -236,8 +295,11 @@ def reach_by(dimension: str, samples: Optional[list] = None) -> dict:
 def dimension_report(dimensions: Optional[list] = None) -> dict:
     """Every axis worth looking at, plus how much of the data carries it."""
     samples = _load("samples.json", [])
-    dimensions = dimensions or ["kind", "local_hour", "subject", "cover_variant",
-                                "series", "translation", "hashtag_set"]
+    # `is None`, not falsy: `[] or DEFAULTS` is DEFAULTS, so asking for zero
+    # dimensions used to silently return all seven of them.
+    if dimensions is None:
+        dimensions = ["kind", "local_hour", "subject", "cover_variant",
+                      "series", "translation", "hashtag_set"]
     report = {"samples": len(samples), "dimensions": {}}
     for dim in dimensions:
         rows = reach_by(dim, samples)
