@@ -28,10 +28,27 @@ from app.services import llm, material, state as sm, typography, video
 from app.utils import utils
 
 CONTENT_MODE = "quiet_quote_reel"
-MIN_SECONDS = 10.0
+# A quiet quote Reel is ONE sentence held on screen. The reader is done in about
+# four seconds — measured, not guessed: mean watch time over the first ten
+# collected Reels was 4.0s against a 15.0s render, i.e. 26% completion, and no
+# Reel ever cleared 37%. Instagram ranks Reels on completion and replays, so a
+# 15-second hold on three seconds of information was capping reach by
+# construction. The fix is to stop padding, not to add content: at 8s the same
+# footage and the same quote read as ~50% completion.
+#
+# MIN_SECONDS has to come down with it — target_seconds() clamps to this floor,
+# so lowering only DEFAULT_SECONDS would silently do nothing.
+MIN_SECONDS = 6.0
 MAX_SECONDS = 24.0
-DEFAULT_SECONDS = 15.0
-MAX_QUOTE_CHARS = 180
+DEFAULT_SECONDS = 8.0
+# A quote has to be readable in the time it is on screen, so the real ceiling is
+# a function of the duration — see max_quote_chars(). Shortening the Reel to 8s
+# without moving this would just have traded low completion for a card nobody
+# can finish. 13 chars/second is a slow, deliberate read; the quotes actually
+# produced run 55-84 chars, so this only clips the long tail the model
+# occasionally returns.
+READING_CHARS_PER_SECOND = 13.0
+MAX_QUOTE_CHARS = 180  # absolute ceiling, whatever the duration
 MAX_QUOTE_LINES = 3
 
 # The reference Reels hold 4-8 words a line. Wrapping purely on pixel width
@@ -140,6 +157,23 @@ def target_seconds() -> float:
     return max(MIN_SECONDS, min(MAX_SECONDS, configured))
 
 
+def max_quote_chars() -> int:
+    """Longest quote that can actually be read in the time it is on screen."""
+    return int(min(MAX_QUOTE_CHARS, READING_CHARS_PER_SECOND * target_seconds()))
+
+
+def _quote_word_budget() -> tuple[int, int]:
+    """Word range to ask the model for, sized to fit max_quote_chars().
+
+    Derived rather than hardcoded so the prompt cannot drift away from the
+    ceiling the normaliser will actually enforce. ~5.9 chars per word including
+    the trailing space, measured over the quotes this account has published.
+    """
+    ceiling = max_quote_chars() / 5.9
+    upper = max(6, int(ceiling))
+    return max(4, upper - 6), upper
+
+
 def language_name() -> str:
     return str(
         config.app.get("quote_reel_default_language", DEFAULT_LANGUAGE)
@@ -165,8 +199,9 @@ def clean_quote(text: str) -> str:
     quote = " ".join(lines[:MAX_QUOTE_LINES])
     quote = re.sub(r"\s+", " ", quote).strip()
     quote = quote.strip(" -")
-    if len(quote) > MAX_QUOTE_CHARS:
-        quote = quote[: MAX_QUOTE_CHARS - 1].rsplit(" ", 1)[0].rstrip(".,;:") + "."
+    limit = max_quote_chars()
+    if len(quote) > limit:
+        quote = quote[: limit - 1].rsplit(" ", 1)[0].rstrip(".,;:") + "."
     return _open_with_a_capital(quote)
 
 
@@ -218,6 +253,10 @@ def resolve_quote(params: VideoParams) -> str:
     subject = (getattr(params, "video_subject", "") or "faith in ordinary days").strip()
     # The word budget is deliberately tighter than the old 12-26: at 26 words the
     # overlay wrapped to three full-width lines and stopped reading as a quote.
+    # Tightened again from 10-18 when the hold came down to 8s — 18 words runs
+    # right up against max_quote_chars(), and asking for a shorter quote is
+    # better than truncating a longer one mid-thought.
+    words = _quote_word_budget()
     prompt = f"""Write one short poetic faith quote for an Instagram Reel.
 
 Language: {language}.
@@ -225,7 +264,7 @@ Topic: {subject}
 
 Style rules:
 - Quiet, contemplative, and human.
-- One sentence or two short lines, 10-18 words total.
+- One sentence or two short lines, {words[0]}-{words[1]} words total.
 - Wrap the two to four words that carry the meaning in *single asterisks*.
   Exactly one such phrase, and never the whole sentence.
 - No all-caps hook, no hashtags, no CTA, no sermon.

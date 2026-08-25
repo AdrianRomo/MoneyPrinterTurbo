@@ -27,6 +27,19 @@ from app.services import hashtags
 from app.services.postiz import PostizService
 
 GRAPH = "https://graph.instagram.com/v21.0"
+GROWTH_STORE = "/influencer-automation-2.0/storage/growth/account.json"
+
+# Account-level metrics, i.e. the ones that answer "is this account growing?".
+#
+# Nothing collected them until 2026-08-25. Every number in this module was
+# per-MEDIA — reach and saves on individual posts — which measures whether a
+# post did well, never whether the account did. So the pipeline could report
+# healthy for eleven days while followers sat at 47, and there is no history to
+# reconstruct: a follower count is an instantaneous reading and cannot be
+# backfilled. Hence a daily snapshot, kept forever, from the first run onward.
+ACCOUNT_FIELDS = "username,media_count,followers_count,follows_count"
+ACCOUNT_METRICS = ("reach", "profile_views", "accounts_engaged", "total_interactions")
+ACCOUNT_WINDOW_DAYS = 28
 # Give Instagram time to accumulate numbers; a post measured after an hour tells
 # you about posting time, not about the hashtags.
 MIN_AGE_HOURS = 48
@@ -112,6 +125,111 @@ def fetch_insights(token: str, media_id: str, product_type: str = "") -> dict:
     return out
 
 
+def fetch_account(token: str) -> dict:
+    """Follower/following/media counts. {} if the call fails."""
+    try:
+        r = requests.get(f"{GRAPH}/me",
+                         params={"fields": ACCOUNT_FIELDS, "access_token": token},
+                         timeout=30)
+        r.raise_for_status()
+        data = r.json()
+    except (requests.exceptions.RequestException, ValueError) as exc:
+        logger.error(f"could not read account fields: {exc}")
+        return {}
+    return {k: data.get(k) for k in ACCOUNT_FIELDS.split(",") if data.get(k) is not None}
+
+
+def fetch_account_insights(token: str, days: int = ACCOUNT_WINDOW_DAYS) -> dict:
+    """Windowed account totals. Each metric is requested on its own.
+
+    One request per metric on purpose: the media endpoint already taught us that
+    a single rejected metric fails the WHOLE request, and losing the follower
+    trend because 'profile_views' was renamed would be the same bad trade
+    fetch_insights() already guards against.
+    """
+    until = int(datetime.now(timezone.utc).timestamp())
+    since = until - days * 86400
+    out: dict[str, int] = {}
+    for metric in ACCOUNT_METRICS:
+        try:
+            r = requests.get(f"{GRAPH}/me/insights",
+                             params={"metric": metric, "period": "day",
+                                     "metric_type": "total_value",
+                                     "since": since, "until": until,
+                                     "access_token": token}, timeout=30)
+            if r.status_code != 200:
+                logger.warning(f"account metric {metric!r} unavailable: http {r.status_code}")
+                continue
+            data = r.json().get("data") or []
+            if data and isinstance(data[0].get("total_value"), dict):
+                out[metric] = data[0]["total_value"].get("value")
+        except (requests.exceptions.RequestException, ValueError) as exc:
+            logger.warning(f"account metric {metric!r} failed: {exc}")
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def _load_growth() -> list:
+    try:
+        with open(GROWTH_STORE, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def record_account_snapshot(token: str) -> dict:
+    """Append today's account reading to the growth series.
+
+    One row per calendar day, last write wins, so running the collector twice in
+    a day corrects the row rather than double-counting it.
+    """
+    account = fetch_account(token)
+    if not account:
+        return {}
+    snapshot = {"at": datetime.now(timezone.utc).isoformat(),
+                "date": datetime.now(timezone.utc).date().isoformat(),
+                **account,
+                **fetch_account_insights(token)}
+
+    series = [row for row in _load_growth() if row.get("date") != snapshot["date"]]
+    series.append(snapshot)
+    series.sort(key=lambda row: str(row.get("date")))
+    try:
+        os.makedirs(os.path.dirname(GROWTH_STORE), exist_ok=True)
+        with open(GROWTH_STORE, "w", encoding="utf-8") as fh:
+            json.dump(series, fh, indent=2)
+    except OSError as exc:
+        logger.warning(f"could not write the growth series: {exc}")
+    return snapshot
+
+
+def growth_report(days: int = 28) -> dict:
+    """Change in the account-level series over the window, or why it cannot say."""
+    series = _load_growth()
+    if len(series) < 2:
+        return {"days": len(series),
+                "note": "need at least two daily snapshots before growth is a number"}
+    first, last = series[max(0, len(series) - days)], series[-1]
+    span = max(1, len(series[max(0, len(series) - days):]) - 1)
+    delta = {}
+    for key in ("followers_count", "media_count", "reach", "profile_views",
+                "accounts_engaged", "total_interactions"):
+        if isinstance(first.get(key), (int, float)) and isinstance(last.get(key), (int, float)):
+            delta[key] = last[key] - first[key]
+    followers = delta.get("followers_count")
+    return {
+        "from": first.get("date"), "to": last.get("date"), "days_observed": span,
+        "latest": {k: last.get(k) for k in ("followers_count", "follows_count",
+                                            "media_count", "reach", "profile_views")},
+        "delta": delta,
+        "followers_per_day": round(followers / span, 2) if followers is not None else None,
+        # The ratio a visitor reads as "is this a real account or a bot", and the
+        # one thing on this page that is fixed by hand rather than by the pipeline.
+        "follow_ratio": (round(last["followers_count"] / last["follows_count"], 2)
+                         if last.get("follows_count") else None),
+    }
+
+
 def _local_hour(when: datetime) -> Optional[int]:
     """The hour of the account's civil day a post went out.
 
@@ -136,7 +254,7 @@ def collect(token: str, post_urls: dict[str, str]) -> dict:
         return {"collected": 0, "error": "no media listed"}
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=MIN_AGE_HOURS)
-    collected, skipped_young, unmatched = 0, 0, 0
+    collected, skipped_young, unmatched, stories = 0, 0, 0, 0
 
     for entry in log:
         set_id, post_id = entry.get("set_id"), entry.get("post_id")
@@ -152,7 +270,16 @@ def collect(token: str, post_urls: dict[str, str]) -> dict:
 
         media = permalinks.get(_norm(post_urls.get(post_id, "")))
         if not media:
-            unmatched += 1
+            # Stories are not a measurement failure — /me/media never returns
+            # them, so a story can NEVER be matched to a permalink and will be
+            # retried, and re-counted, on every run forever. Lumping them in
+            # with genuine misses is what drove "unmatched" from 10 to 26 and
+            # made the number unreadable: it looked like a degrading matcher
+            # when it was a format that is structurally unmeasurable.
+            if str(entry.get("kind") or "").lower() == "story":
+                stories += 1
+            else:
+                unmatched += 1
             continue
 
         metrics = fetch_insights(token, media["id"], media.get("product_type", ""))
@@ -178,6 +305,8 @@ def collect(token: str, post_urls: dict[str, str]) -> dict:
         )
 
     return {"collected": collected, "too_young": skipped_young, "unmatched": unmatched,
+            "stories_unmeasurable": stories,
+            "account": record_account_snapshot(token), "growth": growth_report(),
             "scores": hashtags.set_scores(), "retention": hashtags.retention_report(),
             "dimensions": hashtags.dimension_report()}
 
@@ -187,7 +316,9 @@ def main() -> int:
     # makes no API calls, so it is safe to run any time — including on a laptop
     # that cannot reach docker-devops.
     if "--report" in sys.argv[1:]:
-        print(json.dumps(hashtags.dimension_report(), indent=2, default=str))
+        print(json.dumps({"growth": growth_report(),
+                          "dimensions": hashtags.dimension_report()},
+                         indent=2, default=str))
         return 0
 
     token = os.environ.get("IG_TOKEN", "").strip()

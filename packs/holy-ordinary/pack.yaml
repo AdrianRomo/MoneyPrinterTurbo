@@ -1355,6 +1355,8 @@ themes:
   - God's nearness in daily life
   - gratitude for small things
 cadence:
+  # Mirrors content_scheduler.PLAN and OVERRIDES it — changing only the code
+  # default changes nothing. See the comment above PLAN for why story is 0.
   post:
     per_day: 1
   carousel:
@@ -1362,7 +1364,7 @@ cadence:
   reel:
     per_day: 2
   story:
-    per_day: 1
+    per_day: 0
 footage:
   moods:
     hope:

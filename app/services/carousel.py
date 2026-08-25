@@ -36,6 +36,14 @@ from app.services.verse_card import _cover
 # against this exact frame, so take it from there rather than restating it.
 WIDTH, HEIGHT = wikimedia.TARGET_W, wikimedia.TARGET_H
 MAX_SLIDES = 10                      # hard API limit for carousel children
+# Slides build() appends after the photographs: the verse slide and the closing
+# CTA. They count against MAX_SLIDES exactly like a photograph does, so the
+# photo budget has to reserve room for them — at carousel_slides=8 the set was
+# 8 photos + verse + CTA = 10, i.e. sitting precisely on the API limit with no
+# margin, and raising carousel_slides by one would have had Instagram reject the
+# whole post rather than drop a slide.
+RESERVED_SLIDES = 2
+MAX_PHOTO_SLIDES = MAX_SLIDES - RESERVED_SLIDES
 
 # A slide may never be built by enlarging its photograph. Commons caps
 # thumbnails at 3840px, so a source can clear the search filter and still
@@ -536,6 +544,68 @@ def _remember_photos(urls: list, keep: int = 300) -> None:
         logger.warning(f"could not persist used photos: {exc}")
 
 
+def _verse_slide(photo_img: Image.Image, verse) -> Image.Image:
+    """The one slide worth keeping.
+
+    Three carousels were published with a save ask in the caption, a save ask on
+    the closing slide, and a question inviting a reply. They returned 0 saves, 0
+    shares and 0 comments between them. The ask was never the problem: a set of
+    beautiful photographs is *consumed in the swipe*, and there is nothing left
+    to come back for, so asking harder could not have worked.
+
+    So the set now carries something durable — scripture paired to the subject —
+    on the slide right before the CTA. Saves and shares are weighted x12 and x20
+    in hashtags.SCORE_WEIGHTS because they are what Instagram ranks on, and they
+    are what someone does with an artifact, not with a view.
+    """
+    img = _cover(photo_img, WIDTH, HEIGHT)
+    # Heavier treatment than the CTA slide: this type is small and set in a
+    # Light serif, so it needs the contrast that the large bold CTA does not.
+    img = ImageEnhance.Color(img).enhance(0.55)
+    img = img.filter(ImageFilter.GaussianBlur(radius=WIDTH * 0.012))
+    img = Image.alpha_composite(img.convert("RGBA"),
+                                Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 140))).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    text = f"\u201c{verse.text.strip()}\u201d"
+    fnt, lines = ty.fit(draw, text, ty.SERIF, int(WIDTH * 0.82), int(HEIGHT * 0.46),
+                        start=int(WIDTH * 0.052), min_size=int(WIDTH * 0.028),
+                        instance="Light", leading=ty.LEAD_BODY)
+    line_h = int(fnt.size * ty.LEAD_BODY)
+    y = int(HEIGHT * 0.46) - (len(lines) * line_h) // 2
+    for line in lines:
+        ty.draw_centered(draw, WIDTH, y, line, fnt, (255, 255, 255, 245))
+        y += line_h
+
+    f_ref = ty.font(ty.SANS, int(WIDTH * 0.021), "Light")
+    ty.draw_centered(draw, WIDTH, y + int(HEIGHT * 0.030),
+                     f"{verse.reference.upper()}  \u00b7  {verse.translation.upper()}",
+                     f_ref, (255, 255, 255, 205), ty.TRACK_TITLE)
+    return img
+
+
+def carousel_verse(subject: str):
+    """Scripture for the verse slide, or None if one cannot be verified.
+
+    Shares verse_card's recent-reference memory in both directions, so the
+    carousel and the daily card cannot land on the same verse in the same week.
+    Never raises: a carousel that cannot reach the verse API is still a valid
+    carousel, it just loses the slide.
+    """
+    from app.services import verse_card as vc
+
+    try:
+        verse = vc.select_verse(theme=subject.replace("_", " "))
+    except Exception as exc:
+        logger.warning(f"carousel verse lookup failed: {exc}")
+        return None
+    if verse is None:
+        logger.warning(f"no verifiable verse for carousel subject {subject!r}")
+        return None
+    vc._remember_reference(verse.reference)
+    return verse
+
+
 def _cta_slide(photo_img: Image.Image) -> Image.Image:
     """Closing slide. People who swiped this far are the warmest audience the
     account will ever have, and until now they were shown a photo and nothing
@@ -578,7 +648,7 @@ def build(subject: Optional[str] = None, slides: int = 8,
     known = subjects()
     subject = subject if subject in known else choose_subject()
     noun, query, extra_pool, label_locations = known[subject]
-    slides = max(3, min(slides, MAX_SLIDES))
+    slides = max(3, min(slides, MAX_PHOTO_SLIDES))
 
     found = wikimedia.search(query, limit=slides * 4, extra_pool=extra_pool)
     if len(found) < slides:
@@ -678,11 +748,30 @@ def build(subject: Optional[str] = None, slides: int = 8,
            # Kept for the publish variant: the cover hook and how flat the
            # photography was are the two things worth reading back against reach.
            "headline": headline, "colours": colours}
-    # Closing CTA slide, built from the cover image so the set bookends.
+    # Verse slide then closing CTA, both built from the cover image so the set
+    # bookends. Order matters: the verse is the thing worth saving and the CTA
+    # is what asks for the save, so the ask must come after the reason.
     if len(paths) >= 3 and cover_source is not None:
+        verse = carousel_verse(subject)
+        if verse is not None:
+            verse_path = os.path.join(out_dir, f"{stamp}-{subject}-zy-verse.jpg")
+            _verse_slide(cover_source, verse).save(verse_path, "JPEG", quality=94,
+                                                   optimize=True)
+            paths.append(verse_path)
+            car["verse"] = {"reference": verse.reference,
+                            "translation": verse.translation}
         cta_path = os.path.join(out_dir, f"{stamp}-{subject}-zz-cta.jpg")
         _cta_slide(cover_source).save(cta_path, "JPEG", quality=94, optimize=True)
         paths.append(cta_path)
+
+    # The budget above should make this unreachable; it is here because the cost
+    # of being wrong is Instagram rejecting the post outright, and the cost of
+    # the check is nothing. Trim from the middle: the cover, the verse and the
+    # CTA are the slides that carry the job.
+    if len(paths) > MAX_SLIDES:
+        logger.warning(f"carousel built {len(paths)} slides; trimming to {MAX_SLIDES}")
+        keep_tail = paths[-RESERVED_SLIDES:]
+        paths[:] = paths[: MAX_SLIDES - RESERVED_SLIDES] + keep_tail
 
     _remember_photos([p.url for p in used])
     _remember_subject(subject)
@@ -821,6 +910,13 @@ def publish(car: dict, publish_at=None) -> dict:
         "cover_variant": car.get("headline"),
         "slides": len(car.get("paths") or []),
         "flattest_colour": round(min(car["colours"]), 1) if car.get("colours") else None,
+        # Whether the set carried a verse slide, and which verse. The slide was
+        # added to make carousels worth saving, so "did it" has to be readable
+        # back against saves and shares — and it is absent whenever the verse
+        # API could not be reached, which makes this a real A/B rather than a
+        # constant.
+        "verse_slide": bool(car.get("verse")),
+        "verse_reference": (car.get("verse") or {}).get("reference"),
     }
     result = svc.schedule_post(media, caption, publish_at,
                                integration=integration["integration"],
