@@ -70,11 +70,16 @@ class TestSubtitleService(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             subtitle_file = Path(tmp_dir) / "generated.srt"
+            # This test covers the LEGACY punctuation path. It read the live
+            # config.toml, where subtitle_cadence is now "words", so create()
+            # took the word-cadence branch and emitted one cue instead of two —
+            # the path under test was never executed. The cadence branch has its
+            # own coverage in test_subtitle_cadence.py.
             with patch.object(subtitle, "model", None), patch.object(
                 subtitle,
                 "WhisperModel",
                 _FakeWhisperModel,
-            ):
+            ), patch.object(subtitle.subtitle_cadence, "enabled", return_value=False):
                 subtitle.create("audio.mp3", str(subtitle_file))
 
             items = subtitle.file_to_subtitles(str(subtitle_file))

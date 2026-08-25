@@ -295,8 +295,11 @@ def reach_by(dimension: str, samples: Optional[list] = None) -> dict:
 def dimension_report(dimensions: Optional[list] = None) -> dict:
     """Every axis worth looking at, plus how much of the data carries it."""
     samples = _load("samples.json", [])
-    dimensions = dimensions or ["kind", "local_hour", "subject", "cover_variant",
-                                "series", "translation", "hashtag_set"]
+    # `is None`, not falsy: `[] or DEFAULTS` is DEFAULTS, so asking for zero
+    # dimensions used to silently return all seven of them.
+    if dimensions is None:
+        dimensions = ["kind", "local_hour", "subject", "cover_variant",
+                      "series", "translation", "hashtag_set"]
     report = {"samples": len(samples), "dimensions": {}}
     for dim in dimensions:
         rows = reach_by(dim, samples)

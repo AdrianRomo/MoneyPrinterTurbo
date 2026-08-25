@@ -60,6 +60,21 @@ class TestReachBy(unittest.TestCase):
         self.assertEqual(rows, {})
 
     def test_report_is_empty_rather_than_invented_without_data(self):
+        # Must be read against an EMPTY store. This asserted "no data" while
+        # reading the live samples.json, so it only passed while the account
+        # had never collected anything and broke on the first real sample.
+        import tempfile
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(hashtags, "STORAGE", tmp):
+                report = hashtags.dimension_report()
+        self.assertEqual(report["samples"], 0)
+        self.assertEqual(report["dimensions"], {})
+
+    def test_asking_for_no_dimensions_returns_no_dimensions(self):
+        # `[] or DEFAULTS` is DEFAULTS, so an explicitly empty list used to
+        # return all seven axes — the opposite of what was asked for.
         report = hashtags.dimension_report([])
         self.assertEqual(report["dimensions"], {})
 

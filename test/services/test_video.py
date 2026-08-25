@@ -654,24 +654,35 @@ class TestVideoService(unittest.TestCase):
     def test_concat_video_clips_falls_back_when_stream_copy_fails(self):
         """Stream-copy failures should fall back to the encoded concat path."""
 
-        def fake_run(command, capture_output, text, check):
+        # **kwargs, not a fixed signature: _get_effective_video_codec() probes
+        # ffmpeg through this same subprocess.run with timeout=, and a fake that
+        # cannot accept it fails with a TypeError from inside the code under
+        # test, which reads as a production bug rather than a stale double.
+        def fake_run(command, *args, **kwargs):
             if "-c" in command and command[command.index("-c") + 1] == "copy":
                 return types.SimpleNamespace(returncode=1, stdout="", stderr="copy failed")
             return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        # The fallback codec is asserted below, so it has to be pinned rather
+        # than inherited from config.toml (which now selects h264_nvenc).
+        config.app["video_codec"] = "libx264"
 
         with tempfile.TemporaryDirectory() as temp_dir:
             clip_file = os.path.join(temp_dir, "clip.mp4")
             output_file = os.path.join(temp_dir, "combined.mp4")
             Path(clip_file).write_bytes(b"fake")
 
-            with patch.object(vd.subprocess, "run", side_effect=fake_run) as run:
-                result = vd.concat_video_clips_with_ffmpeg(
-                    clip_files=[clip_file],
-                    output_file=output_file,
-                    threads=1,
-                    output_dir=temp_dir,
-                    stream_copy=True,
-                )
+            # Patched so the encoder probe issues no subprocess call of its own,
+            # keeping the indexes below pointing at the concat commands.
+            with patch.object(vd, "_ffmpeg_encoder_exists", return_value=True):
+                with patch.object(vd.subprocess, "run", side_effect=fake_run) as run:
+                    result = vd.concat_video_clips_with_ffmpeg(
+                        clip_files=[clip_file],
+                        output_file=output_file,
+                        threads=1,
+                        output_dir=temp_dir,
+                        stream_copy=True,
+                    )
 
         self.assertEqual(result, "libx264")
         commands = [call.args[0] for call in run.call_args_list]
@@ -1108,7 +1119,9 @@ class TestVideoService(unittest.TestCase):
     def test_concat_video_clips_limits_output_to_audio_duration(self):
         """最终拼接时应裁到音频时长，避免安全余量带来明显静音尾巴。"""
 
-        def fake_run(command, capture_output, text, check):
+        # See the note on fake_run above: the encoder probe calls this with
+        # timeout=, which a fixed four-argument signature cannot accept.
+        def fake_run(command, *args, **kwargs):
             return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1116,14 +1129,15 @@ class TestVideoService(unittest.TestCase):
             output_file = os.path.join(temp_dir, "combined.mp4")
             Path(clip_file).write_bytes(b"fake")
 
-            with patch.object(vd.subprocess, "run", side_effect=fake_run) as run:
-                vd.concat_video_clips_with_ffmpeg(
-                    clip_files=[clip_file],
-                    output_file=output_file,
-                    threads=1,
-                    output_dir=temp_dir,
-                    max_duration=10.0,
-                )
+            with patch.object(vd, "_ffmpeg_encoder_exists", return_value=True):
+                with patch.object(vd.subprocess, "run", side_effect=fake_run) as run:
+                    vd.concat_video_clips_with_ffmpeg(
+                        clip_files=[clip_file],
+                        output_file=output_file,
+                        threads=1,
+                        output_dir=temp_dir,
+                        max_duration=10.0,
+                    )
 
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("-t") + 1], "10.000")

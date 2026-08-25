@@ -223,9 +223,12 @@ def test_full_preview_reports_when_tts_returns_no_audio():
             "generate_full_voiceover_preview_button",
         ).click().run()
 
-    assert [item.value for item in app.error] == [
-        "配音服务未返回试听音频，请检查相关设置和应用日志。"
-    ]
+    # Scoped to this panel's own message rather than every st.error on the
+    # page: the Article Mode panel surfaces live RSS poll failures from
+    # articles.db, so unrelated errors land in the same list and a voice
+    # preview test should not fail because a feed is down.
+    expected = "配音服务未返回试听音频，请检查相关设置和应用日志。"
+    assert [item.value for item in app.error if item.value == expected] == [expected]
     assert [str(item.value) for item in app.exception] == []
 
 
