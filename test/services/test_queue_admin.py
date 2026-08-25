@@ -174,5 +174,89 @@ class TestThrottleHandling(unittest.TestCase):
         self.assertNotIn("secret-key", detail)
 
 
+class TestLedgerReconciliation(unittest.TestCase):
+    """Deleting from Postiz is only half a flush.
+
+    Per-type quota is counted from the LOCAL publish log, not from Postiz, so a
+    deleted post's ledger row keeps holding its slot. After the first real flush
+    the scheduler reported "next post slot is 2026-09-01" against a completely
+    empty queue and would have published nothing for a week.
+    """
+
+    def _log(self):
+        return [
+            {"kind": "post", "date": "2026-08-26", "post_id": "q1"},
+            {"kind": "reel", "date": "2026-08-27", "post_id": "q2"},
+            {"kind": "reel", "date": "2026-08-20", "post_id": "live1"},
+            {"kind": "story", "date": "2026-08-19"},  # predates id tracking
+        ]
+
+    def _prune(self, ids, tmp):
+        path = str(Path(tmp) / "publish_log.json")
+        Path(path).write_text(json.dumps(self._log()))
+        with patch("app.services.postiz.PostizService._publish_log_path",
+                   staticmethod(lambda: path)):
+            result = queue_admin.prune_publish_log(ids)
+        return result, json.loads(Path(path).read_text())
+
+    def test_only_deleted_posts_lose_their_slot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, kept = self._prune({"q1", "q2"}, tmp)
+        self.assertEqual(result["pruned"], 2)
+        self.assertEqual({e.get("post_id") for e in kept}, {"live1", None})
+
+    def test_a_still_live_post_keeps_holding_its_slot(self):
+        # Pruning a post that is still in Postiz would let the scheduler
+        # double-book the day.
+        with tempfile.TemporaryDirectory() as tmp:
+            _, kept = self._prune({"q1"}, tmp)
+        self.assertIn("q2", {e.get("post_id") for e in kept})
+
+    def test_entries_without_an_id_are_never_pruned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, kept = self._prune({"q1", "q2", "live1"}, tmp)
+        self.assertEqual(len(kept), 1)
+        self.assertIsNone(kept[0].get("post_id"))
+
+    def test_the_log_is_backed_up_before_it_is_rewritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, _ = self._prune({"q1"}, tmp)
+            saved = json.loads(Path(result["backup"]).read_text())
+        self.assertEqual(len(saved), 4)
+
+    def test_flush_prunes_only_what_it_actually_deleted(self):
+        posts = [{"id": "q1", "state": "QUEUE"}, {"id": "q2", "state": "QUEUE"}]
+
+        def delete(_svc, post_id):
+            return (post_id == "q1", "deleted" if post_id == "q1" else "http 500")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(queue_admin, "BACKUP_DIR", tmp), \
+                 patch.object(queue_admin, "list_posts", return_value=posts), \
+                 patch.object(queue_admin, "delete_post", side_effect=delete), \
+                 patch.object(queue_admin, "prune_publish_log",
+                              return_value={"pruned": 1}) as pruner, \
+                 patch.object(queue_admin.time, "sleep"):
+                queue_admin.flush(FakeService(),
+                                  datetime(2026, 8, 1, tzinfo=timezone.utc),
+                                  datetime(2026, 9, 1, tzinfo=timezone.utc),
+                                  apply=True, reason="test")
+        pruner.assert_called_once_with({"q1"})
+
+    def test_nothing_deleted_means_the_ledger_is_untouched(self):
+        posts = [{"id": "q1", "state": "QUEUE"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(queue_admin, "BACKUP_DIR", tmp), \
+                 patch.object(queue_admin, "list_posts", return_value=posts), \
+                 patch.object(queue_admin, "delete_post", return_value=(False, "http 429")), \
+                 patch.object(queue_admin, "prune_publish_log") as pruner, \
+                 patch.object(queue_admin.time, "sleep"):
+                queue_admin.flush(FakeService(),
+                                  datetime(2026, 8, 1, tzinfo=timezone.utc),
+                                  datetime(2026, 9, 1, tzinfo=timezone.utc),
+                                  apply=True, reason="test")
+        pruner.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

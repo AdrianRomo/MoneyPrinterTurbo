@@ -120,6 +120,42 @@ def write_backup(posts: list[dict], reason: str) -> str:
     return path
 
 
+def prune_publish_log(post_ids: set[str]) -> dict:
+    """Drop the local quota-ledger entries for posts that no longer exist.
+
+    Deleting from Postiz is only half a flush. Per-type daily quota is counted
+    from ``publish_log.json``, NOT from Postiz — the public posts API returns no
+    settings, so a post's kind cannot be recovered from it (see PostizService
+    __init__). Every queued post therefore left a ledger row claiming its slot,
+    and those rows outlive the post: after the 2026-08-25 flush the scheduler
+    still reported "next post slot is 2026-09-01, outside 7d horizon" against a
+    completely empty queue, and would have published nothing for a week.
+
+    Matched on post_id so only the deleted posts are affected — entries for
+    posts that are still live, or that predate id tracking, are left alone.
+    """
+    path = PostizService._publish_log_path()
+    entries = PostizService._load_publish_log()
+    if not entries:
+        return {"pruned": 0, "kept": 0, "note": "publish log is empty"}
+
+    backup = f"{path}.bak-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    try:
+        with open(backup, "w", encoding="utf-8") as fh:
+            json.dump(entries, fh)
+    except OSError as exc:
+        return {"pruned": 0, "error": f"refusing to prune, could not back up the log: {exc}"}
+
+    kept = [e for e in entries if str(e.get("post_id") or "") not in post_ids]
+    pruned = len(entries) - len(kept)
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(kept, fh)
+    except OSError as exc:
+        return {"pruned": 0, "error": f"could not rewrite the publish log: {exc}"}
+    return {"pruned": pruned, "kept": len(kept), "backup": backup}
+
+
 def delete_post(svc: PostizService, post_id: str) -> tuple[bool, str]:
     """Delete one post, waiting out the throttler rather than giving up on it."""
     delay = BACKOFF_START_SECONDS
@@ -162,16 +198,22 @@ def flush(svc: PostizService, start: datetime, end: datetime, *,
                                    for p in targets]
         return summary
 
-    deleted, failures = 0, []
+    deleted, failures, gone = 0, [], set()
     for index, post in enumerate(targets):
-        ok, detail = delete_post(svc, str(post.get("id")))
+        post_id = str(post.get("id"))
+        ok, detail = delete_post(svc, post_id)
         if ok:
             deleted += 1
+            gone.add(post_id)
         else:
             failures.append({"id": post.get("id"), "error": detail})
         if index < len(targets) - 1:
             time.sleep(DELETE_PAUSE_SECONDS)
 
+    # Only the posts that actually went. A ledger row for a post still sitting
+    # in Postiz must keep holding its slot, or the scheduler would double-book.
+    if gone:
+        summary["ledger"] = prune_publish_log(gone)
     summary["deleted"] = deleted
     summary["failed"] = failures
     # Ask Postiz again rather than trusting the loop's own tally: a delete that
